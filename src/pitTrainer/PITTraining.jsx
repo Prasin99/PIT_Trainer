@@ -31,7 +31,8 @@ const PIT_CONFIG_OVERRIDES = {
   altitude: {
     initial: 500,
     target: 500,
-    gainPitch: 30,          // ft/s at full aft stick -> ~1800 ft/min, matches the variometer's 0-20 (x100 fpm) scale
+    gainPitch: 30,
+    rateLag: 2.8,         // ft/s at full aft stick -> ~1800 ft/min, matches the variometer's 0-20 (x100 fpm) scale
     tolerance: { green: 20, yellow: 50 },
   },
   heading: {
