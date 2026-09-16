@@ -1,0 +1,20 @@
+// /**
+//  * SkyTest-style gradient: green at target → yellow at the green-tolerance
+//  * boundary → orange at the yellow-tolerance boundary → red at the band
+//  * edge (yellow * 1.2). Returns null past the edge so the band cleanly
+//  * stops. Piecewise so the green-tolerance zone still reads "mostly
+//  * green" rather than slipping into yellow halfway through.
+//  */
+// function toleranceColor(d, greenTol, yellowTol) {
+//   const redEdge = yellowTol * 1.2;
+//   if (d > redEdge) return null;
+//   let h;
+//   if (d <= greenTol) {
+//     h = 120 - 40 * (d / greenTol);                              // 120 → 80
+//   } else if (d <= yellowTol) {
+//     h = 80  - 40 * ((d - greenTol)  / (yellowTol - greenTol));  // 80  → 40
+//   } else {
+//     h = 40  - 40 * ((d - yellowTol) / (redEdge - yellowTol));   // 40  → 0
+//   }
+//   return `hsl(${Math.max(0, h)}, 80%, 45%)`;
+// }
