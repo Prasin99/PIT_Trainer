@@ -16,7 +16,7 @@ const PANEL_HEIGHT = 880;
 // is deliberately NOT tied to climb/descent (that pairing is Altimeter +
 // Variometer + Airspeed, driven straight off vSpeed with no AI pitch
 // involved).
-const MAX_BANK_DEG = 45; // full turn rate = 45° bank (was 30°)
+const MAX_BANK_DEG = 40; // full turn rate = 45° bank (was 30°)
 
 // Display-only lag (s) for the Variometer needle. The altimeter follows the
 // fast physics (altitude rateLag), while the VSI needle eases toward the
