@@ -3,7 +3,7 @@ import { SessionHeader } from '../flightCore/instruments/SessionHeader';
 import { PITPanel } from './PITPanel';
 import { useFlightLoop } from '../flightCore/useFlightLoop';
 import { useInputAxes } from '../flightCore/useInputAxes';
-import { createFlightState, stepFlight } from '../flightCore/flightDynamics';
+import { createFlightState, stepFlight, angularDiff } from '../flightCore/flightDynamics';
 import { buildFlightConfig } from '../flightCore/flightConfig';
 
 const PANEL_WIDTH = 1180;
@@ -16,7 +16,12 @@ const PANEL_HEIGHT = 880;
 // is deliberately NOT tied to climb/descent (that pairing is Altimeter +
 // Variometer + Airspeed, driven straight off vSpeed with no AI pitch
 // involved).
-const MAX_BANK_DEG = 30;
+const MAX_BANK_DEG = 45; // full turn rate = 45° bank (was 30°)
+
+// Display-only lag (s) for the Variometer needle. The altimeter follows the
+// fast physics (altitude rateLag), while the VSI needle eases toward the
+// real vertical speed like a real instrument. Larger = calmer needle.
+const VSI_DISPLAY_LAG = 2.0;
 
 // RPM Indicator scale (must match flightCore/instruments/TachometerDial.jsx).
 // The tachometer reads the engine's throttle position directly — push the
@@ -32,7 +37,8 @@ const PIT_CONFIG_OVERRIDES = {
     initial: 500,
     target: 500,
     gainPitch: 30,
-    rateLag: 2.8,         // ft/s at full aft stick -> ~1800 ft/min, matches the variometer's 0-20 (x100 fpm) scale
+    rateLag: 0.8,         // stick -> climb/descent response time (s); was 2.8, felt sluggish on the altimeter
+    altimeterRateScale: 1.5, // altimeter moves 1.5x faster; Variometer & Airspeed unchanged (1 = off)
     tolerance: { green: 20, yellow: 50 },
   },
   heading: {
@@ -47,6 +53,10 @@ const PIT_CONFIG_OVERRIDES = {
     initialThrottle: 0.5,    // mid-scale start; also the RPM Indicator's resting position
     pitchSpeedPullShift: 30, // climbing (stick back) costs ~30kt at full deflection
     pitchSpeedPushShift: 30, // diving (stick forward) gains ~30kt
+    // Speed follows the Variometer at constant RPM: descending -> faster,
+    // climbing -> slower. 1 kt per ft/s -> 1800 ft/min (full stick) = 30 kt,
+    // the same range the stick-only coupling above gave.
+    vSpeedSpeedCoupling: 1.0,
     tolerance: { green: 5, yellow: 10 },
   },
 };
@@ -91,6 +101,9 @@ export function PITTraining({ settings, onComplete, onExit }) {
     setPhase((p) => (p === 'running' ? 'paused' : 'running'));
   }, []);
 
+  // Smoothed vertical speed shown on the Variometer (display only).
+  const vsiRef = useRef(0);
+
   const readSnap = () => {
     const s = stateRef.current;
     const gainRoll = cfgRef.current.heading.gainRoll;
@@ -99,7 +112,7 @@ export function PITTraining({ settings, onComplete, onExit }) {
       heading: s.heading,
       speed: s.speed,
       // ft/s -> ft/min -> the gauge's x100 units
-      vspeed: Math.max(-20, Math.min(20, (s.vSpeed * 60) / 100)),
+      vspeed: Math.max(-20, Math.min(20, (vsiRef.current * 60) / 100)),
       // Same signal that moves the Compass, rescaled into a bank angle so
       // the AI visibly "causes" what the compass is doing. No pitch term
       // here on purpose — the AI stays level regardless of climb/descent.
@@ -114,12 +127,23 @@ export function PITTraining({ settings, onComplete, onExit }) {
   const [elapsed, setElapsed] = useState(0);
   const elapsedRef = useRef(0);
   const finishedRef = useRef(false);
+  // Per-frame deviations from target, for the result page (scoring only).
+  const samplesRef = useRef([]);
 
   useFlightLoop((dt) => {
     if (finishedRef.current) return;
 
     const inputs = poll(dt);
     stepFlight(stateRef.current, inputs, channelMode, cfgRef.current, dt, Math.random);
+    vsiRef.current += (stateRef.current.vSpeed - vsiRef.current) * (1 - Math.exp(-dt / VSI_DISPLAY_LAG));
+
+    const st = stateRef.current;
+    samplesRef.current.push({
+      t: elapsedRef.current,
+      altitudeDev: Math.abs(st.altitude - st.currentTargetAltitude),
+      headingDev: Math.abs(angularDiff(st.heading, st.currentTargetHeading)),
+      speedDev: Math.abs(st.speed - st.currentTargetSpeed),
+    });
 
     setSnap(readSnap());
 
@@ -129,7 +153,13 @@ export function PITTraining({ settings, onComplete, onExit }) {
     if (elapsedRef.current >= duration) {
       finishedRef.current = true;
       runningRef.current = false;
-      onComplete({ duration });
+      const c = cfgRef.current;
+      onComplete({
+        duration,
+        samples: samplesRef.current,
+        tolerance: { altitude: c.altitude.tolerance, heading: c.heading.tolerance, speed: c.speed.tolerance },
+        targets: { altitude: c.altitude.target, heading: c.heading.target, speed: c.speed.target },
+      });
     }
   }, runningRef);
 

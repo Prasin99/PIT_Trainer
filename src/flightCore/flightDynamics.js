@@ -110,7 +110,8 @@ export function stepFlight(state, inputs, mode, cfg, dt, rng) {
       + automaticAltitudeMovement;
 
     state.vSpeed += (vSpeedCmd - state.vSpeed) * (dt / cfg.altitude.rateLag);
-    state.altitude += state.vSpeed * dt;
+    //state.altitude += state.vSpeed * dt;
+    state.altitude += state.vSpeed * dt * (cfg.altitude.altimeterRateScale ?? 1);
   }
 
   if (hdgInactive) {
@@ -172,8 +173,16 @@ export function stepFlight(state, inputs, mode, cfg, dt, rng) {
     const pitchPullShift = cfg.speed.pitchSpeedPullShift ?? 110;
     const pitchPushShift = cfg.speed.pitchSpeedPushShift ?? 110;
 
-    const pitchSpeedShift =
-      pitchInput >= 0
+    // Opt-in (PIT): couple airspeed to the ACTUAL vertical speed instead of
+    // the stick, so any descent — stick push or automatic drift — speeds
+    // the aircraft up, and any climb slows it down, at constant RPM.
+    // kt of speed change per ft/s of vSpeed. Modules that don't set it
+    // keep the original stick-based behaviour below.
+    const vsCoupling = cfg.speed.vSpeedSpeedCoupling;
+
+    const pitchSpeedShift = vsCoupling
+      ? vsCoupling * state.vSpeed
+      : pitchInput >= 0
         ? pitchPullShift * pitchInput
         : pitchPushShift * pitchInput;
 

@@ -56,12 +56,6 @@ export function AttitudeIndicator({ pitch = 0, bank = 0, size = 260, inactive = 
 
             {/* Horizon line */}
             <rect x={cx - size} y={cy - 1.5} width={size * 2} height={3} fill="#f5f0e1" />
-            <rect x={cx - size * 0.31} y={cy - 3} width={size * 0.62} height={6} fill="#e8c34a" />
-            {/* Aircraft-nose chevron on the horizon */}
-            <path
-              d={`M ${cx - 12} ${cy - 3} L ${cx} ${cy + 7} L ${cx + 12} ${cy - 3} L ${cx + 7} ${cy - 3} L ${cx} ${cy + 1} L ${cx - 7} ${cy - 3} Z`}
-              fill="#e2571f"
-            />
 
             {/* Pitch reference bars */}
             {bars.map(({ deg, labeled, w }) => {
@@ -86,10 +80,11 @@ export function AttitudeIndicator({ pitch = 0, bank = 0, size = 260, inactive = 
           </g>
         </g>
 
-        {/* Fixed bank-angle scale (does not rotate) */}
-        {bankTicks.map((deg) => {
+        {/* Fixed bank-angle scale on the case (does not rotate).
+            0° is marked by a fixed downward index triangle, like the PFD. */}
+        {bankTicks.filter((d) => d !== 0).map((deg) => {
           const a = (deg - 90) * Math.PI / 180;
-          const big = deg === 0 || Math.abs(deg) === 30 || Math.abs(deg) === 60;
+          const big = Math.abs(deg) === 30 || Math.abs(deg) === 60;
           const r1 = r - (big ? 20 : 14);
           const r2 = r - 5;
           return (
@@ -100,13 +95,25 @@ export function AttitudeIndicator({ pitch = 0, bank = 0, size = 260, inactive = 
             />
           );
         })}
+        <path d={`M ${cx - 7} ${cy - r + 5} L ${cx + 7} ${cy - r + 5} L ${cx} ${cy - r + 17} Z`}
+          fill="#f5f0e1" />
 
-        {/* Fixed center index (roll pointer) */}
-        <path d={`M ${cx - 8} ${cy - r + 8} L ${cx + 8} ${cy - r + 8} L ${cx} ${cy - r + 22} Z`}
-          fill="none" stroke="#f5f0e1" strokeWidth={2} strokeLinejoin="round" />
-        <path d={`M ${cx - 4} ${cy - r + 12} L ${cx + 4} ${cy - r + 12} L ${cx} ${cy - r + 19} Z`}
-          fill="#e8c34a" />
-        <line x1={cx - 18} y1={cy - r + 24} x2={cx + 18} y2={cy - r + 24} stroke="#f5f0e1" strokeWidth={1.5} />
+        {/* Rate-of-turn pointer — rotates with the sky/ground (bank only, no
+            pitch translation) and points up at the fixed scale. Bank is
+            derived from turn rate in PITTraining, so its deflection reads
+            as rate of turn; wings level / no turn = under the 0° index. */}
+        <g transform={`rotate(${-bank} ${cx} ${cy})`}>
+          <path d={`M ${cx} ${cy - r + 20} L ${cx + 8} ${cy - r + 33} L ${cx - 8} ${cy - r + 33} Z`}
+            fill="#e8c34a" stroke="#000" strokeWidth={0.75} strokeLinejoin="round" />
+        </g>
+
+        {/* Fixed miniature aircraft — attached to the case, never rotates.
+            The sky/ground moves behind it. */}
+        <rect x={cx - size * 0.31} y={cy - 3} width={size * 0.62} height={6} fill="#e8c34a" />
+        <path
+          d={`M ${cx - 12} ${cy - 3} L ${cx} ${cy + 7} L ${cx + 12} ${cy - 3} L ${cx + 7} ${cy - 3} L ${cx} ${cy + 1} L ${cx - 7} ${cy - 3} Z`}
+          fill="#e2571f"
+        />
 
         {/* Outer ring to hide clip edge artifacts */}
         <circle cx={cx} cy={cy} r={r - 1} fill="none" stroke="#000" strokeWidth={2} />
