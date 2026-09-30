@@ -74,8 +74,8 @@ export function PITSetup({ onStart, onBack }) {
   const seconds = String(duration % 60).padStart(2, '0');
 
   return (
-    <div className="h-screen overflow-hidden bg-slate-50 text-slate-900 p-3">
-      <div className="relative bg-white border border-slate-200 rounded-xl shadow-sm h-full px-6 py-5 flex flex-col">
+    <div className="min-h-screen xl:h-screen xl:overflow-hidden bg-slate-50 text-slate-900 p-3">
+      <div className="relative bg-white border border-slate-200 rounded-xl shadow-sm xl:h-full px-6 py-5 flex flex-col">
         {onBack && (
           <button
             onClick={onBack}
@@ -94,9 +94,9 @@ export function PITSetup({ onStart, onBack }) {
           </p>
         </header>
 
-        <div className="grid grid-cols-1 xl:grid-cols-[1.08fr_1fr] gap-6 flex-1 min-h-0 pb-20 overflow-y-auto">
+        <div className="grid grid-cols-1 xl:grid-cols-[1.08fr_1fr] gap-6 xl:flex-1 xl:min-h-0 xl:pb-20 xl:overflow-y-auto">
           {/* Left side */}
-          <section className="min-h-0">
+          <section className="xl:min-h-0">
             <h2 className="font-semibold text-slate-800 mb-2">Your task</h2>
             <div className="space-y-2">
               {TARGETS.map((t) => (
@@ -156,7 +156,7 @@ export function PITSetup({ onStart, onBack }) {
           </section>
 
           {/* Right side */}
-          <section className="min-h-0">
+          <section className="xl:min-h-0">
             <h2 className="font-semibold text-slate-800">Instrument panel</h2>
             <p className="text-sm text-slate-500 mb-2">What each dial shows and how you control it</p>
 
@@ -177,7 +177,7 @@ export function PITSetup({ onStart, onBack }) {
           </section>
         </div>
 
-        <div className="absolute left-0 right-0 bottom-5 flex justify-center">
+        <div className="mt-6 flex justify-center xl:mt-0 xl:absolute xl:left-0 xl:right-0 xl:bottom-5">
           <button
             type="button"
             onClick={() => onStart({ duration })}
