@@ -25,6 +25,7 @@ const VSI_DISPLAY_LAG = 2.0;
 const BANK_RETURN_LAG = 1.0;
 const BANK_INTO_LAG = 0.15;   // banking into a turn (s)
 const MAX_PITCH_DEG = 7;   // nose up/down at full vertical speed (2000 ft/min)
+const BANK_MAX_RATE = 35;   // max horizon rotation speed (degrees per second)
 
 // RPM Indicator scale (must match flightCore/instruments/TachometerDial.jsx).
 // The tachometer reads the engine's throttle position directly — push the
@@ -147,7 +148,10 @@ export function PITTraining({ settings, onComplete, onExit }) {
       const cur = bankRef.current;
       const into = (Math.sign(cur) === Math.sign(target) || cur === 0) && Math.abs(target) > Math.abs(cur);
       const lag = into ? BANK_INTO_LAG : BANK_RETURN_LAG;
-      bankRef.current = cur + (target - cur) * (1 - Math.exp(-dt / lag));
+      //bankRef.current = cur + (target - cur) * (1 - Math.exp(-dt / lag));
+      const maxStep = BANK_MAX_RATE * dt;
+      const step = Math.max(-maxStep, Math.min(maxStep, (target - cur) * (1 - Math.exp(-dt / lag))));
+      bankRef.current = cur + step;
     }
 
     const st = stateRef.current;
