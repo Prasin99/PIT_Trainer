@@ -12,18 +12,22 @@ import React, { useMemo } from 'react';
  */
 export function AttitudeIndicator({ pitch = 0, bank = 0, size = 260, inactive = false }) {
   const cx = size / 2, cy = size / 2, r = size / 2 - 4;
-  const pxPerDeg = r / 45; // ±45° of pitch fills roughly the visible face
+  // Pitch-ladder spacing matched to the PIT reference dial (5° steps up to
+  // ±20°). PIT never pitches the horizon (pitch stays 0), so this only sets
+  // where the ladder lines are drawn.
+  const pxPerDeg = r / 26;
 
   const clipId = useMemo(() => `ai-clip-${Math.random().toString(36).slice(2)}`, []);
 
   // Pitch bars: [offsetDeg, labeled, halfWidthFrac]
   const bars = [
-    { deg: 60, labeled: false, w: 0.30 },
-    { deg: 30, labeled: false, w: 0.30 },
-    { deg: 10, labeled: true, w: 0.46 },
-    { deg: -10, labeled: true, w: 0.46 },
-    { deg: -30, labeled: false, w: 0.30 },
-    { deg: -60, labeled: false, w: 0.62 },
+    { deg: 15, labeled: true, w: 0.06 },
+    { deg: 10, labeled: true, w: 0.22 },
+    { deg: 5, labeled: true, w: 0.06 },
+    { deg: -5, labeled: true, w: 0.06 },
+    { deg: -10, labeled: true, w: 0.22 },
+    { deg: -15, labeled: true, w: 0.06 },
+    { deg: -20, labeled: false, w: 0.25 },
   ];
 
   const bankTicks = [-60, -45, -30, -20, -10, 0, 10, 20, 30, 45, 60];
@@ -63,15 +67,15 @@ export function AttitudeIndicator({ pitch = 0, bank = 0, size = 260, inactive = 
               const half = (size * w) / 2;
               return (
                 <g key={deg}>
-                  <line x1={cx - half} y1={y} x2={cx + half} y2={y} stroke="#f5f0e1" strokeWidth={labeled ? 2.5 : 2} />
+                  <line x1={cx - half} y1={y} x2={cx + half} y2={y} stroke="#f5f0e1" strokeWidth={2} />
                   {labeled && (
                     <>
-                      <text x={cx - half - 14} y={y} fill="#f5f0e1" fontSize={12} fontWeight={700}
-                        textAnchor="middle" dominantBaseline="middle"
-                        fontFamily="ui-sans-serif, system-ui, sans-serif">10</text>
-                      <text x={cx + half + 14} y={y} fill="#f5f0e1" fontSize={12} fontWeight={700}
-                        textAnchor="middle" dominantBaseline="middle"
-                        fontFamily="ui-sans-serif, system-ui, sans-serif">10</text>
+                      <text x={cx - half - 4} y={y} fill="#f5f0e1" fontSize={11} fontWeight={700}
+                        textAnchor="end" dominantBaseline="middle"
+                        fontFamily="ui-sans-serif, system-ui, sans-serif">{deg}</text>
+                      <text x={cx + half + 4} y={y} fill="#f5f0e1" fontSize={11} fontWeight={700}
+                        textAnchor="start" dominantBaseline="middle"
+                        fontFamily="ui-sans-serif, system-ui, sans-serif">{deg}</text>
                     </>
                   )}
                 </g>

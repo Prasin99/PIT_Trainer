@@ -22,6 +22,9 @@ const MAX_BANK_DEG = 40; // full turn rate = 45° bank (was 30°)
 // fast physics (altitude rateLag), while the VSI needle eases toward the
 // real vertical speed like a real instrument. Larger = calmer needle.
 const VSI_DISPLAY_LAG = 2.0;
+const BANK_RETURN_LAG = 1.0;
+const BANK_INTO_LAG = 0.15;   // banking into a turn (s)
+const MAX_PITCH_DEG = 7;   // nose up/down at full vertical speed (2000 ft/min)
 
 // RPM Indicator scale (must match flightCore/instruments/TachometerDial.jsx).
 // The tachometer reads the engine's throttle position directly — push the
@@ -103,7 +106,7 @@ export function PITTraining({ settings, onComplete, onExit }) {
 
   // Smoothed vertical speed shown on the Variometer (display only).
   const vsiRef = useRef(0);
-
+  const bankRef = useRef(0);
   const readSnap = () => {
     const s = stateRef.current;
     const gainRoll = cfgRef.current.heading.gainRoll;
@@ -113,10 +116,12 @@ export function PITTraining({ settings, onComplete, onExit }) {
       speed: s.speed,
       // ft/s -> ft/min -> the gauge's x100 units
       vspeed: Math.max(-20, Math.min(20, (vsiRef.current * 60) / 100)),
+      pitch: Math.max(-MAX_PITCH_DEG, Math.min(MAX_PITCH_DEG, ((vsiRef.current * 60) / 2000) * MAX_PITCH_DEG)),
       // Same signal that moves the Compass, rescaled into a bank angle so
       // the AI visibly "causes" what the compass is doing. No pitch term
       // here on purpose — the AI stays level regardless of climb/descent.
-      bank: Math.max(-MAX_BANK_DEG, Math.min(MAX_BANK_DEG, (s.headingRate / gainRoll) * MAX_BANK_DEG)),
+      //bank: Math.max(-MAX_BANK_DEG, Math.min(MAX_BANK_DEG, (s.headingRate / gainRoll) * MAX_BANK_DEG)),
+      bank: bankRef.current,
       // Throttle (0-1, already smoothed by stepFlight) mapped onto the
       // tach's 5-35 scale.
       rpm: MIN_RPM + Math.max(0, Math.min(1, s.throttle)) * (MAX_RPM - MIN_RPM),
@@ -136,6 +141,14 @@ export function PITTraining({ settings, onComplete, onExit }) {
     const inputs = poll(dt);
     stepFlight(stateRef.current, inputs, channelMode, cfgRef.current, dt, Math.random);
     vsiRef.current += (stateRef.current.vSpeed - vsiRef.current) * (1 - Math.exp(-dt / VSI_DISPLAY_LAG));
+    {
+      const gr = cfgRef.current.heading.gainRoll;
+      const target = Math.max(-MAX_BANK_DEG, Math.min(MAX_BANK_DEG, (stateRef.current.headingRate / gr) * MAX_BANK_DEG));
+      const cur = bankRef.current;
+      const into = (Math.sign(cur) === Math.sign(target) || cur === 0) && Math.abs(target) > Math.abs(cur);
+      const lag = into ? BANK_INTO_LAG : BANK_RETURN_LAG;
+      bankRef.current = cur + (target - cur) * (1 - Math.exp(-dt / lag));
+    }
 
     const st = stateRef.current;
     samplesRef.current.push({
@@ -206,6 +219,7 @@ export function PITTraining({ settings, onComplete, onExit }) {
             altitude={snap.altitude}
             vspeed={snap.vspeed}
             bank={snap.bank}
+            pitch={snap.pitch}
             rpm={snap.rpm}
             elapsedSec={elapsed}
           />
