@@ -81,6 +81,19 @@ export function AltimeterDialClassic({ value = 450, size = 260, inactive = false
         <text x={cx + 32} y={cy - r + 34} fill="white" fontSize={9} fontWeight={600}
           fontFamily="ui-sans-serif, system-ui, sans-serif" textAnchor="middle">FEET</text>
 
+        {/* Thousands window: the needle shows hundreds (one turn = 1000 ft),
+            this digit shows the thousands, e.g. 3 + needle at 5 = 3500 ft. */}
+        <g>
+          <rect x={cx - 16} y={cy + r * 0.34} width={32} height={24} rx={3}
+            fill="#0b0a09" stroke="#f5f0e1" strokeWidth={1.2} />
+          <text x={cx} y={cy + r * 0.34 + 12.5} fill="white" fontSize={17} fontWeight={700}
+            fontFamily="ui-monospace, monospace" textAnchor="middle" dominantBaseline="central">
+            {Math.max(0, Math.floor(value / 1000))}
+          </text>
+          <text x={cx} y={cy + r * 0.34 + 34} fill="white" fontSize={8} fontWeight={600}
+            fontFamily="ui-sans-serif, system-ui, sans-serif" textAnchor="middle">×1000 FT</text>
+        </g>
+
         {/* Needle: long thin pointer to value + short fat tail on the far side */}
         <g transform={`rotate(${needleAngle} ${cx} ${cy})`}>
           <line x1={cx} y1={cy + 22} x2={cx} y2={cy - r + 18}

@@ -1,4 +1,5 @@
 import React from 'react';
+import { TrackView } from './TrackView';
 
 /**
  * PIT session summary. Layout follows the MIC Session Summary; rows are
@@ -39,11 +40,12 @@ export function PITSummary({ result, onTryAgain, onDone }) {
     );
   }
 
-  const { duration, samples, tolerance = {}, targets = {} } = result;
+  const { duration, samples, tolerance = {}, targets = {}, legs = [], requiredTrack = [], flownTrack = [] } = result;
+  const perInstruction = legs.length > 0;
 
   const rows = [
-    { key: 'altitude', label: 'Altimeter', target: `${Math.round(targets.altitude ?? 500)} ft`, devKey: 'altitudeDev', unit: 'ft', t: tolerance.altitude ?? { green: 20, yellow: 50 } },
-    { key: 'heading', label: 'Compass (heading)', target: `${String(Math.round(targets.heading ?? 0)).padStart(3, '0')}°`, devKey: 'headingDev', unit: 'degrees', t: tolerance.heading ?? { green: 5, yellow: 10 } },
+    { key: 'altitude', label: 'Altimeter', target: perInstruction ? 'per instruction' : `${Math.round(targets.altitude ?? 500)} ft`, devKey: 'altitudeDev', unit: 'ft', t: tolerance.altitude ?? { green: 20, yellow: 50 } },
+    { key: 'heading', label: 'Compass (heading)', target: perInstruction ? 'per instruction' : `${String(Math.round(targets.heading ?? 0)).padStart(3, '0')}°`, devKey: 'headingDev', unit: 'degrees', t: tolerance.heading ?? { green: 5, yellow: 10 } },
     { key: 'speed', label: 'Airspeed', target: `${Math.round(targets.speed ?? 120)} kt`, devKey: 'speedDev', unit: 'kt', t: tolerance.speed ?? { green: 5, yellow: 10 } },
   ];
 
@@ -109,6 +111,19 @@ export function PITSummary({ result, onTryAgain, onDone }) {
             Yellow: ±{rows[0].t.yellow} ft · ±{rows[1].t.yellow}° · ±{rows[2].t.yellow} kt.
           </p>
         </section>
+
+        {perInstruction && requiredTrack.length > 1 && (
+          <section className="mb-8">
+            <h2 className="text-xl font-semibold mb-1">Track</h2>
+            <p className="text-sm text-slate-400 mb-4">
+              Top: the track required by the {legs.length} instructions. Bottom: the track you flew
+              (same scale, so you can compare them directly).
+            </p>
+            <div className="overflow-x-auto">
+              <TrackView required={requiredTrack} flown={flownTrack} legs={legs} width={830} height={580} />
+            </div>
+          </section>
+        )}
 
         <div className="flex flex-wrap gap-4 justify-end">
           <button

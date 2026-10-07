@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { DEFAULT_COUNT, estimateDuration } from './instructions';
+import { primeSpeech } from './speech';
 
 /**
  * PIT (Panel Instrument Test) description / setup screen.
@@ -6,8 +8,8 @@ import React, { useState } from 'react';
  */
 
 const TARGETS = [
-  { title: 'Altitude', value: '500 ft', tol: '±20 ft green · ±50 ft yellow' },
-  { title: 'Heading', value: '000° (North)', tol: '±5° green · ±10° yellow' },
+  { title: 'Heading', value: 'as instructed', tol: '±5° green · ±10° yellow' },
+  { title: 'Altitude', value: 'as instructed (start 3000 ft)', tol: '±20 ft green · ±50 ft yellow' },
   { title: 'Airspeed', value: '120 kt', tol: '±5 kt green · ±10 kt yellow' },
 ];
 
@@ -28,8 +30,8 @@ const INSTRUMENTS = [
   },
   {
     title: 'Altimeter',
-    tag: 'hold 500 ft',
-    description: 'Shows altitude in feet (one turn of the needle = 1,000 ft).',
+    tag: 'as instructed',
+    description: 'Altitude in feet: the needle shows hundreds (one turn = 1,000 ft), the small window the thousands.',
     control: 'Stick fwd/back · ↑↓ (back = climb)',
   },
   {
@@ -40,7 +42,7 @@ const INSTRUMENTS = [
   },
   {
     title: 'Compass',
-    tag: 'hold 000°',
+    tag: 'as instructed',
     description: 'Shows your heading. It turns whenever the horizon is banked.',
     control: 'Stick L/R · ←→',
   },
@@ -69,9 +71,10 @@ function InfoRow({ title, tag, description, control }) {
 }
 
 export function PITSetup({ onStart, onBack }) {
-  const [duration, setDuration] = useState(120);
-  const minutes = Math.floor(duration / 60);
-  const seconds = String(duration % 60).padStart(2, '0');
+  const [count, setCount] = useState(DEFAULT_COUNT);
+  const est = estimateDuration(count);
+  const minutes = Math.floor(est / 60);
+  const seconds = String(est % 60).padStart(2, '0');
 
   return (
     <div className="min-h-screen xl:h-screen xl:overflow-hidden bg-slate-50 text-slate-900 p-3">
@@ -89,8 +92,8 @@ export function PITSetup({ onStart, onBack }) {
           <h1 className="text-2xl font-bold text-slate-950">PIT Trainer</h1>
           <p className="text-slate-600 mt-1 text-sm">
             Panel Instrument Test — fly using the classic round-dial cockpit panel.
-            Scan all instruments, understand how they react to each other, and keep
-            altitude, heading and airspeed within their tolerance bands.
+            Follow the heading, altitude and vertical-speed
+            instructions, scan all instruments, and keep airspeed at 120 kt.
           </p>
         </header>
 
@@ -105,7 +108,7 @@ export function PITSetup({ onStart, onBack }) {
                   className="flex items-center justify-between gap-4 border border-slate-200 rounded px-4 py-1.5"
                 >
                   <span className="text-slate-800">
-                    Hold <span className="font-semibold">{t.title}</span> at{' '}
+                    <span className="font-semibold">{t.title}</span>:{' '}
                     <span className="font-bold">{t.value}</span>
                   </span>
                   <span className="text-xs text-slate-500 whitespace-nowrap">{t.tol}</span>
@@ -115,6 +118,13 @@ export function PITSetup({ onStart, onBack }) {
 
             <h2 className="font-semibold text-slate-800 mt-5 mb-2">How the instruments work together</h2>
             <ul className="text-sm text-slate-600 space-y-1 list-disc pl-5">
+              <li>
+                <span className="font-semibold text-slate-800">Instructions:</span> a new heading (or a turn such as
+                "Turn right 360°"), altitude and vertical speed is given for a set time (e.g. 20 s). When the time is over, the next
+                instruction follows. Choose <span className="font-semibold">Text</span> or{' '}
+                <span className="font-semibold">Audio</span> at the top of the screen;{' '}
+                <span className="font-semibold">View track</span> shows your track vs. the required one.
+              </li>
               <li>
                 <span className="font-semibold text-slate-800">Turn:</span> stick left/right →
                 horizon banks and the compass turns. Centre the triangle to stop the turn.
@@ -139,17 +149,17 @@ export function PITSetup({ onStart, onBack }) {
             <div className="mt-6">
               <div className="flex items-center justify-between mb-2">
                 <label className="font-semibold text-slate-800">
-                  Duration: <span className="font-bold">{minutes}:{seconds}</span>
+                  Number of instructions: <span className="font-bold">{count}</span>
                 </label>
-                <span className="text-sm text-slate-500">Session: {minutes}:{seconds} total</span>
+                <span className="text-sm text-slate-500">Session: about {minutes}:{seconds}</span>
               </div>
               <input
                 type="range"
-                min={30}
-                max={300}
-                step={15}
-                value={duration}
-                onChange={(e) => setDuration(Number(e.target.value))}
+                min={8}
+                max={24}
+                step={1}
+                value={count}
+                onChange={(e) => setCount(Number(e.target.value))}
                 className="w-full accent-blue-600"
               />
             </div>
@@ -180,7 +190,7 @@ export function PITSetup({ onStart, onBack }) {
         <div className="mt-6 flex justify-center xl:mt-0 xl:absolute xl:left-0 xl:right-0 xl:bottom-5">
           <button
             type="button"
-            onClick={() => onStart({ duration })}
+            onClick={() => { primeSpeech(); onStart({ instructionCount: count }); }}
             className="px-16 py-3 rounded bg-blue-600 hover:bg-blue-700 text-white font-semibold text-base transition shadow"
           >
             ▶ Start

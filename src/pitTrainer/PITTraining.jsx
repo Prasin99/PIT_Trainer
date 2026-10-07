@@ -5,6 +5,9 @@ import { useFlightLoop } from '../flightCore/useFlightLoop';
 import { useInputAxes } from '../flightCore/useInputAxes';
 import { createFlightState, stepFlight, angularDiff } from '../flightCore/flightDynamics';
 import { buildFlightConfig } from '../flightCore/flightConfig';
+import { START, DEFAULT_COUNT, generateLegs, totalDuration, buildRequiredTrack, legLines, legSpeech, stepIdeal, advancePos } from './instructions';
+import { TrackView } from './TrackView';
+import { speak, stopSpeech } from './speech';
 
 const PANEL_WIDTH = 1180;
 const PANEL_HEIGHT = 880;
@@ -38,8 +41,8 @@ const MAX_RPM = 35;
 // than MIC's tapes, so a few flightCore defaults are overridden here.
 const PIT_CONFIG_OVERRIDES = {
   altitude: {
-    initial: 500,
-    target: 500,
+    initial: START.altitude,   // 3000 ft; instructions move between 2000-5000 ft
+    target: START.altitude,
     gainPitch: 30,
     rateLag: 0.8,         // stick -> climb/descent response time (s); was 2.8, felt sluggish on the altimeter
     altimeterRateScale: 1.5, // altimeter moves 1.5x faster; Variometer & Airspeed unchanged (1 = off)
@@ -65,6 +68,9 @@ const PIT_CONFIG_OVERRIDES = {
   },
 };
 
+// How often (s) a point is added to the flown / required tracks.
+const TRACK_SAMPLE_SEC = 0.25;
+
 /**
  * PIT (Panel Instrument Test) training screen.
  *
@@ -87,7 +93,17 @@ const PIT_CONFIG_OVERRIDES = {
  * and down with a touch of realistic inertia rather than snapping instantly.
  */
 export function PITTraining({ settings, onComplete, onExit }) {
-  const { duration = 120 } = settings ?? {};
+  const { instructionCount = DEFAULT_COUNT } = settings ?? {};
+
+  // Instruction sequence (legs). The session lasts until the last one ends.
+  const legsRef = useRef(null);
+  if (!legsRef.current) legsRef.current = generateLegs(instructionCount);
+  const legs = legsRef.current;
+  const duration = totalDuration(legs);
+  // Full required chart, computed once (never shown during the test) --
+  // it only fixes the map frame so the maps look like a printed chart.
+  const fullRequiredRef = useRef(null);
+  if (!fullRequiredRef.current) fullRequiredRef.current = buildRequiredTrack(legs);
 
   const cfgRef = useRef(buildFlightConfig('easy', PIT_CONFIG_OVERRIDES));
   const stateRef = useRef(createFlightState(cfgRef.current));
@@ -103,6 +119,61 @@ export function PITTraining({ settings, onComplete, onExit }) {
 
   const togglePause = useCallback(() => {
     setPhase((p) => (p === 'running' ? 'paused' : 'running'));
+  }, []);
+
+  // ── Instructions ──────────────────────────────────────────────
+  // Sequence of legs (heading / altitude / VS / time) covering the session.
+  const [legIdx, setLegIdx] = useState(0);
+  const legIdxRef = useRef(0);
+
+  // 'text' = instruction shown on screen; 'audio' = read aloud, text hidden.
+  const [instrMode, setInstrMode] = useState('text');
+  const instrModeRef = useRef('text');
+  const announce = useCallback((i) => {
+    const leg = legsRef.current[i];
+    if (!leg) return;
+    const prevAlt = i > 0 ? legsRef.current[i - 1].altitude : START.altitude;
+    speak(legSpeech(leg, prevAlt));
+  }, []);
+  const setMode = useCallback((m) => {
+    instrModeRef.current = m;
+    setInstrMode(m);
+    if (m === 'audio') announce(legIdxRef.current);
+    else stopSpeech();
+  }, [announce]);
+  useEffect(() => () => stopSpeech(), []);
+
+  // Pause (button or track view) stops the audio at once; on resume the
+  // current instruction is read again in Audio mode.
+  const wasPausedRef = useRef(false);
+  useEffect(() => {
+    if (phase === 'paused') {
+      wasPausedRef.current = true;
+      stopSpeech();
+    } else if (wasPausedRef.current) {
+      wasPausedRef.current = false;
+      if (instrModeRef.current === 'audio') announce(legIdxRef.current);
+    }
+  }, [phase, announce]);
+
+  // ── Tracks: required (ideal) vs flown, in nautical miles ─────
+  const idealRef = useRef({ heading: START.heading, altitude: START.altitude, x: 0, y: 0 });
+  const posRef = useRef({ x: 0, y: 0 });
+  const requiredTrackRef = useRef([{ x: 0, y: 0, leg: 0, v: 'level' }]);
+  const flownTrackRef = useRef([{ x: 0, y: 0, leg: 0, v: 'level', hdg: START.heading, alt: START.altitude }]);
+  const trackTimerRef = useRef(0);
+
+  // Track overlay: opening it pauses the test; closing resumes it.
+  const [showTrack, setShowTrack] = useState(false);
+  const pausedByTrackRef = useRef(false);
+  const openTrack = useCallback(() => {
+    setPhase((p) => { pausedByTrackRef.current = p === 'running'; return 'paused'; });
+    setShowTrack(true);
+  }, []);
+  const closeTrack = useCallback(() => {
+    setShowTrack(false);
+    if (pausedByTrackRef.current) setPhase('running');
+    pausedByTrackRef.current = false;
   }, []);
 
   // Smoothed vertical speed shown on the Variometer (display only).
@@ -155,10 +226,40 @@ export function PITTraining({ settings, onComplete, onExit }) {
     }
 
     const st = stateRef.current;
+
+    // Current instruction (leg) for this moment; announce when it changes.
+    const tNow = elapsedRef.current;
+    let li = legIdxRef.current;
+    while (li + 1 < legs.length && tNow >= legs[li + 1].startT) li++;
+    if (li !== legIdxRef.current) {
+      legIdxRef.current = li;
+      setLegIdx(li);
+      if (instrModeRef.current === 'audio') announce(li);
+    }
+
+    // Required profile + both tracks
+    const ideal = idealRef.current;
+    stepIdeal(ideal, legs[li], dt);
+    advancePos(posRef.current, st.heading, st.speed, dt);
+    trackTimerRef.current += dt;
+    if (trackTimerRef.current >= TRACK_SAMPLE_SEC) {
+      trackTimerRef.current = 0;
+      requiredTrackRef.current.push({ x: ideal.x, y: ideal.y, leg: li, v: ideal.vmode });
+      const fpm = st.vSpeed * 60;
+      flownTrackRef.current.push({
+        x: posRef.current.x, y: posRef.current.y, leg: li,
+        v: fpm > 150 ? 'climb' : fpm < -150 ? 'descent' : 'level',
+        hdg: st.heading, alt: st.altitude,
+      });
+    }
+
+    // Scoring: deviation from the REQUIRED profile (heading / altitude
+    // follow the instructions; airspeed is held at 120 kt).
     samplesRef.current.push({
-      t: elapsedRef.current,
-      altitudeDev: Math.abs(st.altitude - st.currentTargetAltitude),
-      headingDev: Math.abs(angularDiff(st.heading, st.currentTargetHeading)),
+      t: tNow,
+      leg: li,
+      altitudeDev: Math.abs(st.altitude - ideal.altitude),
+      headingDev: Math.abs(angularDiff(st.heading, ideal.heading)),
       speedDev: Math.abs(st.speed - st.currentTargetSpeed),
     });
 
@@ -176,6 +277,9 @@ export function PITTraining({ settings, onComplete, onExit }) {
         samples: samplesRef.current,
         tolerance: { altitude: c.altitude.tolerance, heading: c.heading.tolerance, speed: c.speed.tolerance },
         targets: { altitude: c.altitude.target, heading: c.heading.target, speed: c.speed.target },
+        legs,
+        requiredTrack: requiredTrackRef.current,
+        flownTrack: flownTrackRef.current,
       });
     }
   }, runningRef);
@@ -215,6 +319,17 @@ export function PITTraining({ settings, onComplete, onExit }) {
         onExit={onExit}
       />
 
+      <InstructionBar
+        leg={legs[legIdx]}
+        index={legIdx}
+        total={legs.length}
+        secondsLeft={legs[legIdx] ? Math.max(0, Math.ceil(legs[legIdx].startT + legs[legIdx].duration - elapsed)) : 0}
+        mode={instrMode}
+        onMode={setMode}
+        onRepeat={() => announce(legIdxRef.current)}
+        onViewTrack={openTrack}
+      />
+
       <div ref={mainAreaRef} className="flex-1 relative text-white overflow-hidden flex items-center justify-center">
         <div style={{ transform: `scale(${panelScale})`, transformOrigin: 'center center' }}>
           <PITPanel
@@ -230,13 +345,86 @@ export function PITTraining({ settings, onComplete, onExit }) {
         </div>
       </div>
 
-      {phase === 'paused' && (
+      {showTrack && (
+        <div className="absolute inset-0 z-30 bg-black/70 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-xl p-4 shadow-2xl max-w-full">
+            <div className="flex items-center justify-between mb-3 gap-4">
+              <div className="text-white font-semibold">Track so far — required vs. yours <span className="text-slate-400 font-normal text-sm">(test paused)</span></div>
+              <button onClick={closeTrack} className="px-4 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded">
+                Close &amp; resume
+              </button>
+            </div>
+            <TrackView
+              required={requiredTrackRef.current}
+              flown={flownTrackRef.current}
+              legs={legs}
+              frame={fullRequiredRef.current}
+              width={Math.max(260, Math.min(560, ((panelSize.width || 900) - 90) / 2))}
+              height={Math.max(260, Math.min(520, (panelSize.height || 600) - 90))}
+            />
+          </div>
+        </div>
+      )}
+
+      {phase === 'paused' && !showTrack && (
         <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
           <div className="bg-blue-600 text-white font-bold text-2xl py-4 px-8 w-2/3 text-center rounded">
             Pause
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Instruction strip under the header: the current instruction as text
+ * (or "audio" mode: read aloud, text hidden), a Text/Audio toggle, and a
+ * button to open the track view.
+ */
+function InstructionBar({ leg, index, total, secondsLeft, mode, onMode, onRepeat, onViewTrack }) {
+  if (!leg) return null;
+  const btn = (active) =>
+    `px-3 py-1.5 text-sm font-semibold transition ${active ? 'bg-blue-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-100'}`;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2 bg-white border-b border-slate-300">
+      <div className="flex items-center gap-4 min-w-0">
+        <div className="text-xs text-slate-500 leading-tight">
+          <div className="font-semibold uppercase tracking-wide">Instruction</div>
+          <div>{index + 1} / {total}</div>
+        </div>
+        {mode === 'text' ? (
+          <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-slate-900">
+            {legLines(leg).map(({ label, value }) => (
+              <div key={label} className="whitespace-nowrap">
+                <span className="text-sm font-semibold text-slate-500 mr-2">{label}</span>
+                <span className="text-xl font-bold">{value}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 text-slate-700">
+            <span className="text-xl" aria-hidden>🔊</span>
+            <span className="font-semibold">Audio instruction</span>
+            <button onClick={onRepeat} className="px-3 py-1 text-sm border border-slate-300 rounded hover:bg-slate-100">
+              Repeat
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center gap-3">
+        <div className="font-mono text-sm px-3 py-1 rounded bg-slate-100 text-slate-800 whitespace-nowrap">
+          Next in {secondsLeft}s
+        </div>
+        <div className="flex rounded border border-slate-300 overflow-hidden" role="group" aria-label="Instruction mode">
+          <button className={btn(mode === 'text')} onClick={() => onMode('text')}>Text</button>
+          <button className={btn(mode === 'audio')} onClick={() => onMode('audio')}>Audio</button>
+        </div>
+        <button onClick={onViewTrack} className="px-3 py-1.5 text-sm font-semibold border border-slate-300 rounded bg-white text-slate-700 hover:bg-slate-100">
+          View track
+        </button>
+      </div>
     </div>
   );
 }
