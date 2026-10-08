@@ -105,6 +105,12 @@ export function PITTraining({ settings, onComplete, onExit }) {
   const legs = legsRef.current;
   // Full required chart, computed once (never shown during the test) --
   // it only fixes the map frame so the maps look like a printed chart.
+  const headerLeftRef = useRef(null);   // overall timer value shown in the header
+  // Expected speaking time of each instruction (for the overall timer in Audio mode).
+  const speakSecs = useMemo(() => legs.map((leg, i) => {
+    const words = legSpeech(leg, i > 0 ? legs[i - 1].altitude : START.altitude).trim().split(/\s+/).length;
+    return words * 0.42 + 1;
+  }), [legs]);
   const fullRequiredRef = useRef(null);
   if (!fullRequiredRef.current) fullRequiredRef.current = buildRequiredTrack(legs);
 
@@ -345,7 +351,23 @@ export function PITTraining({ settings, onComplete, onExit }) {
         : ph === 'fly' ? Math.max(0, leg.duration - legClockRef.current) : 0;
       let rest = cur + (ph === 'gap' ? Math.max(0, GAP_SEC - gapClockRef.current) : (legIdxRef.current + 1 < legs.length ? GAP_SEC : 0));
       for (let j = legIdxRef.current + 1; j < legs.length; j++) rest += legs[j].duration + (j + 1 < legs.length ? GAP_SEC : 0);
-      setTiming({ phase: ph, secondsLeft: Math.ceil(cur), remaining: rest });
+      // Overall test timer (header): keeps running while an instruction is
+      // being spoken -- in Audio mode it also counts the expected speaking
+      // time of the current and the remaining instructions.
+      if (instrModeRef.current === 'audio') {
+        if (ph === 'announce') rest += Math.max(0, speakSecs[legIdxRef.current] - announceClockRef.current);
+        for (let j = legIdxRef.current + 1; j < legs.length; j++) rest += speakSecs[j];
+      }
+      // Tick down smoothly: small differences between the expected and the
+      // real speaking time are absorbed gradually instead of jumping.
+      const shown = headerLeftRef.current;
+      if (shown == null || Math.abs(rest - shown) > 20) {
+        headerLeftRef.current = rest;              // first frame / mode switch
+      } else {
+        const next = shown - dt;
+        headerLeftRef.current = Math.max(0, next + Math.max(-0.5 * dt, Math.min(0.5 * dt, rest - next)));
+      }
+      setTiming({ phase: ph, secondsLeft: Math.ceil(cur), remaining: headerLeftRef.current });
     }
 
     if (lastDone) {
