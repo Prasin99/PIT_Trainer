@@ -5,9 +5,9 @@ import { useFlightLoop } from '../flightCore/useFlightLoop';
 import { useInputAxes } from '../flightCore/useInputAxes';
 import { createFlightState, stepFlight, angularDiff } from '../flightCore/flightDynamics';
 import { buildFlightConfig } from '../flightCore/flightConfig';
-import { START, DEFAULT_COUNT, generateLegs, totalDuration, buildRequiredTrack, legLines, legSpeech, stepIdeal, advancePos } from './instructions';
+import { START, DEFAULT_COUNT, GAP_SEC, generateLegs, buildRequiredTrack, legLines, legSpeech, stepIdeal, advancePos } from './instructions';
 import { TrackView } from './TrackView';
-import { speak, stopSpeech } from './speech';
+import { speak, stopSpeech, pauseSpeech, resumeSpeech, isSpeaking, estimateSpeechSeconds } from './speech';
 
 const PANEL_WIDTH = 1180;
 const PANEL_HEIGHT = 880;
@@ -68,6 +68,10 @@ const PIT_CONFIG_OVERRIDES = {
   },
 };
 
+// What the required track flies while the very first instruction is being
+// announced in Audio mode: hold the start heading and altitude.
+const HOLD_START = { type: 'heading', heading: START.heading, altitude: START.altitude, vs: 0, duration: 0 };
+
 // How often (s) a point is added to the flown / required tracks.
 const TRACK_SAMPLE_SEC = 0.25;
 
@@ -99,7 +103,6 @@ export function PITTraining({ settings, onComplete, onExit }) {
   const legsRef = useRef(null);
   if (!legsRef.current) legsRef.current = generateLegs(instructionCount);
   const legs = legsRef.current;
-  const duration = totalDuration(legs);
   // Full required chart, computed once (never shown during the test) --
   // it only fixes the map frame so the maps look like a printed chart.
   const fullRequiredRef = useRef(null);
@@ -122,25 +125,72 @@ export function PITTraining({ settings, onComplete, onExit }) {
   }, []);
 
   // ── Instructions ──────────────────────────────────────────────
-  // Sequence of legs (heading / altitude / VS / time) covering the session.
+  // Each instruction goes through:
+  //   'announce' -- Audio mode only: the instruction is being spoken. Its time
+  //                 has NOT started yet; the aircraft keeps holding the
+  //                 previous heading/altitude (and so does the required track).
+  //   'fly'      -- the instruction's time counts down (e.g. 20 s).
+  //   'gap'      -- 5 s pause holding the instruction before the next one.
   const [legIdx, setLegIdx] = useState(0);
   const legIdxRef = useRef(0);
+  const legPhaseRef = useRef('fly');      // 'announce' | 'fly' | 'gap'
+  const legClockRef = useRef(0);          // seconds flown in the current instruction
+  const gapClockRef = useRef(0);
+  const announceClockRef = useRef(0);
+  const announceLimitRef = useRef(0);     // safety timeout if speech never reports "done"
+  const announceDoneRef = useRef(false);
+  const [timing, setTiming] = useState(() => ({
+    phase: 'fly',
+    secondsLeft: legs[0].duration,
+    remaining: legs.reduce((sum, l, j) => sum + l.duration + (j + 1 < legs.length ? GAP_SEC : 0), 0),
+  }));
 
   // 'text' = instruction shown on screen; 'audio' = read aloud, text hidden.
   const [instrMode, setInstrMode] = useState('text');
   const instrModeRef = useRef('text');
-  const announce = useCallback((i) => {
-    const leg = legsRef.current[i];
-    if (!leg) return;
-    const prevAlt = i > 0 ? legsRef.current[i - 1].altitude : START.altitude;
-    speak(legSpeech(leg, prevAlt));
+
+  const prevAltOf = (i) => (i > 0 ? legsRef.current[i - 1].altitude : START.altitude);
+
+  // Start instruction i: in Audio mode it is spoken first, and its time only
+  // starts once the voice has finished.
+  const startLeg = useCallback((i) => {
+    legIdxRef.current = i;
+    setLegIdx(i);
+    legClockRef.current = 0;
+    gapClockRef.current = 0;
+    if (instrModeRef.current === 'audio') {
+      const text = legSpeech(legsRef.current[i], prevAltOf(i));
+      legPhaseRef.current = 'announce';
+      announceClockRef.current = 0;
+      announceDoneRef.current = false;
+      announceLimitRef.current = estimateSpeechSeconds(text);
+      speak(text, () => { announceDoneRef.current = true; });
+    } else {
+      legPhaseRef.current = 'fly';
+    }
   }, []);
+
+  // "Repeat": the current instruction with the time that is LEFT.
+  const repeatCurrent = useCallback(() => {
+    const i = legIdxRef.current;
+    const leg = legsRef.current[i];
+    if (!leg || legPhaseRef.current === 'announce') return;
+    const left = legPhaseRef.current === 'gap' ? 0 : Math.max(0, Math.ceil(leg.duration - legClockRef.current));
+    speak(legSpeech(leg, prevAltOf(i), left));
+  }, []);
+
   const setMode = useCallback((m) => {
     instrModeRef.current = m;
     setInstrMode(m);
-    if (m === 'audio') announce(legIdxRef.current);
-    else stopSpeech();
-  }, [announce]);
+    // Switching to Audio does not read the instruction that is already
+    // running -- the NEXT instruction is spoken when it starts; "Repeat"
+    // reads the current one with the time left.
+    if (m === 'text') {
+      stopSpeech();
+      // if an instruction was being announced, start its time now
+      if (legPhaseRef.current === 'announce') { legPhaseRef.current = 'fly'; legClockRef.current = 0; }
+    }
+  }, []);
   useEffect(() => () => stopSpeech(), []);
 
   // Pause (button or track view) stops the audio at once; on resume the
@@ -149,12 +199,12 @@ export function PITTraining({ settings, onComplete, onExit }) {
   useEffect(() => {
     if (phase === 'paused') {
       wasPausedRef.current = true;
-      stopSpeech();
+      pauseSpeech();               // stop, but remember where the voice was
     } else if (wasPausedRef.current) {
       wasPausedRef.current = false;
-      if (instrModeRef.current === 'audio') announce(legIdxRef.current);
+      resumeSpeech();              // continue from there -- never restart
     }
-  }, [phase, announce]);
+  }, [phase]);
 
   // ── Tracks: required (ideal) vs flown, in nautical miles ─────
   const idealRef = useRef({ heading: START.heading, altitude: START.altitude, x: 0, y: 0 });
@@ -227,27 +277,46 @@ export function PITTraining({ settings, onComplete, onExit }) {
 
     const st = stateRef.current;
 
-    // Current instruction (leg) for this moment; announce when it changes.
+    // ── Instruction timing ──
     const tNow = elapsedRef.current;
     let li = legIdxRef.current;
-    while (li + 1 < legs.length && tNow >= legs[li + 1].startT) li++;
-    if (li !== legIdxRef.current) {
-      legIdxRef.current = li;
-      setLegIdx(li);
-      if (instrModeRef.current === 'audio') announce(li);
+    let lastDone = false;
+    if (legPhaseRef.current === 'announce') {
+      announceClockRef.current += dt;
+      // Done when the browser reports it, when it has visibly stopped talking
+      // (checked directly -- Chrome sometimes drops its "finished" event),
+      // or at the latest after the estimated speaking time.
+      const stoppedTalking = announceClockRef.current > 1.0 && !isSpeaking();
+      if (announceDoneRef.current || stoppedTalking || announceClockRef.current >= announceLimitRef.current) {
+        legPhaseRef.current = 'fly';           // voice finished -> time starts now
+        legClockRef.current = 0;
+      }
+    } else if (legPhaseRef.current === 'fly') {
+      legClockRef.current += dt;
+      if (legClockRef.current >= legs[li].duration) {
+        if (li + 1 >= legs.length) lastDone = true;
+        else { legPhaseRef.current = 'gap'; gapClockRef.current = 0; }
+      }
+    } else {
+      gapClockRef.current += dt;
+      if (gapClockRef.current >= GAP_SEC) { startLeg(li + 1); li = legIdxRef.current; }
     }
 
-    // Required profile + both tracks
+    // Required profile: while an instruction is being announced the ideal
+    // aircraft keeps flying the previous one (or the start values).
+    const announcing = legPhaseRef.current === 'announce';
+    const idealLegIdx = announcing ? Math.max(0, li - 1) : li;
+    const idealLeg = announcing && li === 0 ? HOLD_START : legs[idealLegIdx];
     const ideal = idealRef.current;
-    stepIdeal(ideal, legs[li], dt);
+    stepIdeal(ideal, idealLeg, dt);
     advancePos(posRef.current, st.heading, st.speed, dt);
     trackTimerRef.current += dt;
     if (trackTimerRef.current >= TRACK_SAMPLE_SEC) {
       trackTimerRef.current = 0;
-      requiredTrackRef.current.push({ x: ideal.x, y: ideal.y, leg: li, v: ideal.vmode });
+      requiredTrackRef.current.push({ x: ideal.x, y: ideal.y, leg: idealLegIdx, v: ideal.vmode });
       const fpm = st.vSpeed * 60;
       flownTrackRef.current.push({
-        x: posRef.current.x, y: posRef.current.y, leg: li,
+        x: posRef.current.x, y: posRef.current.y, leg: idealLegIdx,
         v: fpm > 150 ? 'climb' : fpm < -150 ? 'descent' : 'level',
         hdg: st.heading, alt: st.altitude,
       });
@@ -257,7 +326,7 @@ export function PITTraining({ settings, onComplete, onExit }) {
     // follow the instructions; airspeed is held at 120 kt).
     samplesRef.current.push({
       t: tNow,
-      leg: li,
+      leg: idealLegIdx,
       altitudeDev: Math.abs(st.altitude - ideal.altitude),
       headingDev: Math.abs(angularDiff(st.heading, ideal.heading)),
       speedDev: Math.abs(st.speed - st.currentTargetSpeed),
@@ -268,7 +337,19 @@ export function PITTraining({ settings, onComplete, onExit }) {
     elapsedRef.current += dt;
     setElapsed(elapsedRef.current);
 
-    if (elapsedRef.current >= duration) {
+    // countdowns for the screen
+    {
+      const ph = legPhaseRef.current;
+      const leg = legs[legIdxRef.current];
+      const cur = ph === 'announce' ? leg.duration
+        : ph === 'fly' ? Math.max(0, leg.duration - legClockRef.current) : 0;
+      let rest = cur + (ph === 'gap' ? Math.max(0, GAP_SEC - gapClockRef.current) : (legIdxRef.current + 1 < legs.length ? GAP_SEC : 0));
+      for (let j = legIdxRef.current + 1; j < legs.length; j++) rest += legs[j].duration + (j + 1 < legs.length ? GAP_SEC : 0);
+      setTiming({ phase: ph, secondsLeft: Math.ceil(cur), remaining: rest });
+    }
+
+    if (lastDone) {
+      const duration = elapsedRef.current;
       finishedRef.current = true;
       runningRef.current = false;
       const c = cfgRef.current;
@@ -313,7 +394,7 @@ export function PITTraining({ settings, onComplete, onExit }) {
   return (
     <div className="relative w-screen h-screen bg-[#1a1a1a] overflow-hidden flex flex-col">
       <SessionHeader
-        remainingSec={Math.max(0, duration - elapsed)}
+        remainingSec={Math.max(0, timing.remaining)}
         paused={phase === 'paused'}
         onPauseToggle={togglePause}
         onExit={onExit}
@@ -323,10 +404,11 @@ export function PITTraining({ settings, onComplete, onExit }) {
         leg={legs[legIdx]}
         index={legIdx}
         total={legs.length}
-        secondsLeft={legs[legIdx] ? Math.max(0, Math.ceil(legs[legIdx].startT + legs[legIdx].duration - elapsed)) : 0}
+        secondsLeft={timing.secondsLeft}
+        legPhase={timing.phase}
         mode={instrMode}
         onMode={setMode}
-        onRepeat={() => announce(legIdxRef.current)}
+        onRepeat={() => { if (runningRef.current) repeatCurrent(); }}
         onViewTrack={openTrack}
       />
 
@@ -382,7 +464,9 @@ export function PITTraining({ settings, onComplete, onExit }) {
  * (or "audio" mode: read aloud, text hidden), a Text/Audio toggle, and a
  * button to open the track view.
  */
-function InstructionBar({ leg, index, total, secondsLeft, mode, onMode, onRepeat, onViewTrack }) {
+function InstructionBar({ leg, index, total, secondsLeft, legPhase, mode, onMode, onRepeat, onViewTrack }) {
+  // After the instruction's time is over there is a 5 s pause: hold heading/altitude.
+  const holding = legPhase === 'gap';
   if (!leg) return null;
   const btn = (active) =>
     `px-3 py-1.5 text-sm font-semibold transition ${active ? 'bg-blue-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-100'}`;
@@ -414,9 +498,12 @@ function InstructionBar({ leg, index, total, secondsLeft, mode, onMode, onRepeat
       </div>
 
       <div className="flex items-center gap-3">
-        <div className="font-mono text-sm px-3 py-1 rounded bg-slate-100 text-slate-800 whitespace-nowrap">
-          Next in {secondsLeft}s
-        </div>
+        {/* During the 5 s pause after an instruction's time, no countdown is shown. */}
+        {!holding && (
+          <div className="font-mono text-sm px-3 py-1 rounded bg-slate-100 text-slate-800 whitespace-nowrap">
+            Time left {secondsLeft}s
+          </div>
+        )}
         <div className="flex rounded border border-slate-300 overflow-hidden" role="group" aria-label="Instruction mode">
           <button className={btn(mode === 'text')} onClick={() => onMode('text')}>Text</button>
           <button className={btn(mode === 'audio')} onClick={() => onMode('audio')}>Audio</button>

@@ -19,6 +19,8 @@ export const HEADING_TURN_RATE = 20; // deg/s for heading changes -> short corne
 export const IDEAL_SPEED_KT = 120;  // speed of the required track
 
 export const DEFAULT_COUNT = 20;    // instructions per session (like the chart)
+export const GAP_SEC = 5;           // pause after each instruction's time before the next one
+const ALT_STEP = 100;               // altitudes are always multiples of 100 ft
 
 const DURATIONS = [10, 10, 15, 15, 20, 30];   // seconds per heading leg
 const VS_OPTIONS = [0, 0, 500, 1000, 1000];    // ft/min (0 = level flight)
@@ -83,28 +85,39 @@ export function generateLegs(count = DEFAULT_COUNT, rng = Math.random) {
 
         // vertical: level, or climb/descend at VS for (at most) the leg time
         let altitude = alt;
+        let vsChosen = 0;
         if (vsPick > 0) {
-            const change = Math.max(50, Math.round((vsPick * best.duration) / 60 / 10) * 10); // ft
-            let dir = dirPick;
-            if (alt + dir * change > ALT_MAX || alt + dir * change < ALT_MIN) dir = -dir;
-            altitude = alt + dir * change;
+            // largest 100-ft multiple reachable within the leg time at this VS;
+            // if 500 ft/min is too slow for 100 ft, use 1000 ft/min instead
+            let vsUse = vsPick;
+            let change = Math.floor((vsUse * best.duration) / 60 / ALT_STEP) * ALT_STEP;
+            if (change === 0 && vsUse < 1000) {
+                vsUse = 1000;
+                change = Math.floor((vsUse * best.duration) / 60 / ALT_STEP) * ALT_STEP;
+            }
+            if (change > 0) {
+                let dir = dirPick;
+                if (alt + dir * change > ALT_MAX || alt + dir * change < ALT_MIN) dir = -dir;
+                altitude = alt + dir * change;
+                vsChosen = vsUse;
+            }
         }
 
         const leg = {
             type: best.type, heading: best.heading, headingLabel: best.headingLabel, turn: best.turn,
             altitude, altChange: altitude - alt,
-            vs: altitude === alt ? 0 : vsPick,
+            vs: altitude === alt ? 0 : vsChosen,
             duration: best.duration, startT: t,
         };
         legs.push(leg);
 
         // advance the ideal aircraft through the chosen leg and extend the path
         const dt = 0.1;
-        for (let k = 0; k < Math.round(leg.duration / dt); k++) {
+        for (let k = 0; k < Math.round((leg.duration + GAP_SEC) / dt); k++) {
             stepIdeal(ideal, leg, dt);
             if (k % 3 === 0) path.push({ x: ideal.x, y: ideal.y });
         }
-        t += leg.duration;
+        t += leg.duration + GAP_SEC;   // next instruction comes 5 s after this one's time ends
         alt = altitude;
     }
     return legs;
@@ -140,7 +153,7 @@ function scoreCandidate(cand, ideal, path) {
     // ignore the most recent part of the route (we are still attached to it)
     const older = path.slice(0, Math.max(0, path.length - 12));
     const dt = 0.1;
-    const n = Math.round(cand.duration / dt);
+    const n = Math.round((cand.duration + GAP_SEC) / dt);
     let score = 0;
     for (let k = 0; k < n; k++) {
         stepIdeal(sim, leg, dt);
@@ -166,7 +179,7 @@ export function estimateDuration(count) {
     const avgHeading = DURATIONS.reduce((a, b) => a + b, 0) / DURATIONS.length;
     const avgTurn = TURN_OPTIONS.reduce((a, b) => a + b, 0) / TURN_OPTIONS.length / IDEAL_TURN_RATE;
     const share = TURNS_PER_20 / 20;
-    return Math.round(count * ((1 - share) * avgHeading + share * avgTurn));
+    return Math.round(count * ((1 - share) * avgHeading + share * avgTurn) + (count - 1) * GAP_SEC);
 }
 
 /** Lines shown on screen, like "Heading 320° / Altitude 3500ft / VS 1000ft/min / Time 20 s". */
@@ -204,8 +217,12 @@ function altitudeWords(ft) {
     return `${s} feet`;
 }
 
-/** Sentence read aloud by speech synthesis. */
-export function legSpeech(leg, prevAltitude) {
+/**
+ * Sentence read aloud by speech synthesis.
+ * remainingSec (optional, for "Repeat"): say the time that is LEFT
+ * ("For 15 more seconds"); 0 = the time is already over, so no time is said.
+ */
+export function legSpeech(leg, prevAltitude, remainingSec = null) {
     let lateral;
     if (leg.type === 'turn') {
         lateral = `Turn ${leg.turn > 0 ? 'right' : 'left'} ${Math.abs(leg.turn)} degrees.`;
@@ -220,7 +237,11 @@ export function legSpeech(leg, prevAltitude) {
         const verb = leg.altitude > prevAltitude ? 'Climb' : 'Descend';
         vertical = `${verb} to ${altitudeWords(leg.altitude)}, vertical speed ${leg.vs} feet per minute.`;
     }
-    return `${lateral} ${vertical} For ${leg.duration} seconds.`;
+    let time = ` For ${leg.duration} seconds.`;
+    if (remainingSec != null) {
+        time = remainingSec > 0 ? ` For ${remainingSec} more seconds.` : '';
+    }
+    return `${lateral} ${vertical}${time}`;
 }
 
 // --- ideal (required) profile -------------------------------------------
