@@ -459,7 +459,8 @@ export function PITTraining({ settings, onComplete, onExit }) {
               </button>
             </div>
             <TrackView
-              required={requiredTrackRef.current}
+              //required={requiredTrackRef.current}
+              required={fullRequiredRef.current}
               flown={flownTrackRef.current}
               legs={legs}
               frame={fullRequiredRef.current}

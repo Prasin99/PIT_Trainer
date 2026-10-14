@@ -1,9 +1,9 @@
 // PIT instruction sequence ("legs"), in the style of the PIT flight-plan
-// chart. Two kinds of instruction:
-//   - heading leg: "Heading 145° for 15 s" (+ altitude / vertical speed)
-//   - turn leg:    "Turn right 270°" (a relative turn / full circle, like the
-//                  loops and "+270°" / "+90°" on the chart)
-// When an instruction's time is over, the next one starts.
+// chart. Each instruction changes one or two things (see FORMS below):
+//   heading only, altitude only, heading + altitude, or
+//   heading + vertical speed + time.
+// The heading part is either a heading ("Heading 145°") or a relative turn
+// ("Turn right 270°", like the loops on the chart).
 //
 // Also provides the "required" (ideal) flight profile used for scoring and
 // for the track map: the ideal aircraft turns at IDEAL_TURN_RATE and
@@ -19,8 +19,26 @@ export const HEADING_TURN_RATE = 20; // deg/s for heading changes -> short corne
 export const IDEAL_SPEED_KT = 120;  // speed of the required track
 
 export const DEFAULT_COUNT = 20;    // instructions per session (like the chart)
-export const GAP_SEC = 5;           // pause after each instruction's time before the next one
+export const GAP_SEC = 10;          // pause after each instruction's time before the next one
 const ALT_STEP = 100;               // altitudes are always multiples of 100 ft
+
+// Instruction forms -- usually only one or two things change at a time:
+//   'h'   -> Heading only            (altitude stays the same)        ~20%
+//   'a'   -> Altitude only           (heading stays the same)         ~20%
+//   'ha'  -> Heading + Altitude      (climb/descend to a level)       ~30%
+//   'hvt' -> Heading + Vertical speed + Time (climb/descend at VS
+//            for the given seconds)                                   ~30%
+// Only 'hvt' shows a time (and the "Time left" countdown). For the other
+// forms the instruction is held until the next one comes; internally the
+// required track climbs/descends at ALT_RATE.
+const FORMS = ['h', 'h', 'a', 'a', 'a', 'ha', 'ha', 'ha', 'hvt', 'hvt', 'hvt']; // turns add more 'h' / 'ha'
+const ALT_RATE = 1000;                          // ft/min used for 'a' / 'ha' (required track)
+const ALT_CHANGES = [100, 200, 200, 300, 300, 400, 500]; // ft for 'a' / 'ha'
+// 'hvt': VS and time are paired so VS x time is always a whole 100 ft
+const HVT_OPTIONS = [
+    [1000, 12], [1000, 18], [1000, 18], [1000, 24], [1000, 30],
+    [500, 12], [500, 24],
+];
 
 const DURATIONS = [10, 10, 15, 15, 20, 30];   // seconds per heading leg
 const VS_OPTIONS = [0, 0, 500, 1000, 1000];    // ft/min (0 = level flight)
@@ -71,43 +89,77 @@ export function generateLegs(count = DEFAULT_COUNT, rng = Math.random) {
         const isTurn = turnAt.has(i);
         const hdg = ideal.heading;
 
-        // Vertical part (does not affect the route on the map)
-        const vsPick = pick(VS_OPTIONS, rng);
-        const dirPick = rng() < 0.5 ? 1 : -1;
+        // Which kind of instruction? (turns: heading only or heading + altitude)
+        let form;
+        if (i === 0) form = 'hvt';
+        else if (isTurn) form = rng() < 0.5 ? 'h' : 'ha';
+        else form = pick(FORMS, rng);
 
-        let best = null;
-        for (let c = 0; c < (i === 0 ? 1 : CANDIDATES); c++) {
-            const cand = makeCandidate(isTurn, hdg, rng);
-            const score = scoreCandidate(cand, ideal, path);
-            if (!best || score < best.score) best = { ...cand, score };
-            if (score === 0 && c >= 3) break;
+        // never two "altitude only" in a row, never the same form 3x in a row
+        const prevForms = legs.slice(-2).map((l) => l.form);
+        if (form === 'a' && prevForms[1] === 'a') form = 'ha';
+        if (prevForms.length === 2 && prevForms[0] === form && prevForms[1] === form) {
+            form = isTurn ? (form === 'h' ? 'ha' : 'h') : (form === 'hvt' ? 'h' : 'hvt');
         }
 
-        // vertical: level, or climb/descend at VS for (at most) the leg time
+        // vertical part
         let altitude = alt;
-        let vsChosen = 0;
-        if (vsPick > 0) {
-            // largest 100-ft multiple reachable within the leg time at this VS;
-            // if 500 ft/min is too slow for 100 ft, use 1000 ft/min instead
-            let vsUse = vsPick;
-            let change = Math.floor((vsUse * best.duration) / 60 / ALT_STEP) * ALT_STEP;
-            if (change === 0 && vsUse < 1000) {
-                vsUse = 1000;
-                change = Math.floor((vsUse * best.duration) / 60 / ALT_STEP) * ALT_STEP;
+        let vs = 0;
+        let duration = null;   // fixed for 'hvt'
+        if (form === 'hvt') {
+            const [v, d] = pick(HVT_OPTIONS, rng);
+            const change = (v * d) / 60;
+            let dir = rng() < 0.5 ? 1 : -1;
+            if (alt + dir * change > ALT_MAX || alt + dir * change < ALT_MIN) dir = -dir;
+            altitude = alt + dir * change;
+            vs = v;
+            duration = d;
+        } else if (form === 'a' || form === 'ha') {
+            const change = pick(ALT_CHANGES, rng);
+            let dir = rng() < 0.5 ? 1 : -1;
+            if (alt + dir * change > ALT_MAX || alt + dir * change < ALT_MIN) dir = -dir;
+            altitude = alt + dir * change;
+            vs = ALT_RATE;
+        }
+
+        // Lateral part: route planner picks the heading / turn
+        let best = null;
+        if (form === 'a') {
+            const d = pick([10, 10, 15], rng);   // short, so the straight line stays on the page
+            const keep = {
+                type: 'heading', turn: 0, heading: hdg,
+                headingLabel: fmtHdg(hdg), duration: d
+            };
+            best = { ...keep, score: scoreCandidate(keep, ideal, path) };
+        }
+        if (!best || best.score > 25) {   // ~10 = normal (just leaving the previous leg)
+            let lat = null;
+            for (let c = 0; c < (i === 0 ? 1 : CANDIDATES); c++) {
+                const cand = makeCandidate(isTurn, hdg, rng);
+                if (duration != null && cand.type === 'heading') cand.duration = duration;
+                const score = scoreCandidate(cand, ideal, path);
+                if (!lat || score < lat.score) lat = { ...cand, score };
+                if (score === 0 && c >= 3) break;
             }
-            if (change > 0) {
-                let dir = dirPick;
-                if (alt + dir * change > ALT_MAX || alt + dir * change < ALT_MIN) dir = -dir;
-                altitude = alt + dir * change;
-                vsChosen = vsUse;
+            // "altitude only" would fly off the page / over the route -> add a heading
+            if (!best || lat.score + 10 < best.score) {
+                if (form === 'a') form = 'ha';
+                best = lat;
             }
+        }
+
+        // enough time for the climb/descent when no time is given
+        let legDuration = duration ?? best.duration;
+        if (form === 'a' || form === 'ha') {
+            const need = Math.ceil((Math.abs(altitude - alt) / ALT_RATE) * 60);
+            legDuration = Math.max(legDuration, need + 4);
         }
 
         const leg = {
-            type: best.type, heading: best.heading, headingLabel: best.headingLabel, turn: best.turn,
-            altitude, altChange: altitude - alt,
-            vs: altitude === alt ? 0 : vsChosen,
-            duration: best.duration, startT: t,
+            form, type: best.type, heading: best.heading, headingLabel: best.headingLabel, turn: best.turn,
+            altitude, altChange: altitude - alt, vs: altitude === alt ? 0 : vs,
+            duration: legDuration, startT: t,
+            showVs: form === 'hvt', showTime: form === 'hvt',
         };
         legs.push(leg);
 
@@ -117,7 +169,7 @@ export function generateLegs(count = DEFAULT_COUNT, rng = Math.random) {
             stepIdeal(ideal, leg, dt);
             if (k % 3 === 0) path.push({ x: ideal.x, y: ideal.y });
         }
-        t += leg.duration + GAP_SEC;   // next instruction comes 5 s after this one's time ends
+        t += leg.duration + GAP_SEC;   // next instruction comes GAP_SEC after this one's time ends
         alt = altitude;
     }
     return legs;
@@ -182,22 +234,35 @@ export function estimateDuration(count) {
     return Math.round(count * ((1 - share) * avgHeading + share * avgTurn) + (count - 1) * GAP_SEC);
 }
 
-/** Lines shown on screen, like "Heading 320° / Altitude 3500ft / VS 1000ft/min / Time 20 s". */
+/**
+ * Lines shown on screen, depending on the form:
+ *   h   -> Heading 320°
+ *   a   -> Altitude 3500ft
+ *   ha  -> Heading 320° / Altitude 3500ft
+ *   hvt -> Heading 320° / VS +1000ft/min / Time 18 s
+ */
 export function legLines(leg) {
-    const first = leg.type === 'turn'
-        ? { label: 'Turn', value: `${leg.turn > 0 ? 'Right' : 'Left'} ${Math.abs(leg.turn)}°` }
-        : { label: 'Heading', value: leg.headingLabel };
-    return [
-        first,
-        { label: 'Altitude', value: `${leg.altitude}ft` },
-        { label: 'VS', value: `${leg.vs}ft/min` },
-        { label: 'Time', value: `${leg.duration} s` },
-    ];
+    const form = leg.form || 'ha';
+    const lines = [];
+    if (form !== 'a') {
+        lines.push(leg.type === 'turn'
+            ? { label: 'Turn', value: `${leg.turn > 0 ? 'Right' : 'Left'} ${Math.abs(leg.turn)}°` }
+            : { label: 'Heading', value: leg.headingLabel });
+    }
+    if (form === 'a' || form === 'ha') lines.push({ label: 'Altitude', value: `${leg.altitude}ft` });
+    if (form === 'hvt') {
+        const sign = leg.altChange > 0 ? '+' : leg.altChange < 0 ? '−' : '';
+        lines.push({ label: 'VS', value: `${sign}${leg.vs}ft/min` });
+        lines.push({ label: 'Time', value: `${leg.duration} s` });
+    }
+    return lines;
 }
 
-/** Short label for the map, like the chart: "145° / 15″" or "+270°". */
+/** Short label for the map, like the chart: "145°", "145° / 18″", "+270°" or "3500ft". */
 export function legMapLabel(leg) {
     if (leg.type === 'turn') return `${leg.turn > 0 ? '+' : '−'}${Math.abs(leg.turn)}°`;
+    if (leg.form === 'a') return `${leg.altitude}ft`;
+    if (leg.showTime === false) return leg.headingLabel;
     return `${leg.headingLabel} / ${leg.duration}″`;
 }
 
@@ -223,25 +288,27 @@ function altitudeWords(ft) {
  * ("For 15 more seconds"); 0 = the time is already over, so no time is said.
  */
 export function legSpeech(leg, prevAltitude, remainingSec = null) {
-    let lateral;
-    if (leg.type === 'turn') {
-        lateral = `Turn ${leg.turn > 0 ? 'right' : 'left'} ${Math.abs(leg.turn)} degrees.`;
-    } else {
-        const hdg = NAME_WORDS[leg.headingLabel] ?? digitsOf(leg.heading);
-        lateral = `Heading ${hdg}.`;
+    const form = leg.form || 'ha';
+    const parts = [];
+    if (form !== 'a') {
+        if (leg.type === 'turn') {
+            parts.push(`Turn ${leg.turn > 0 ? 'right' : 'left'} ${Math.abs(leg.turn)} degrees.`);
+        } else {
+            parts.push(`Heading ${NAME_WORDS[leg.headingLabel] ?? digitsOf(leg.heading)}.`);
+        }
     }
-    let vertical;
-    if (leg.vs === 0 || leg.altitude === prevAltitude) {
-        vertical = `Maintain ${altitudeWords(leg.altitude)}.`;
-    } else {
-        const verb = leg.altitude > prevAltitude ? 'Climb' : 'Descend';
-        vertical = `${verb} to ${altitudeWords(leg.altitude)}, vertical speed ${leg.vs} feet per minute.`;
+    const verb = leg.altitude > prevAltitude ? 'Climb' : 'Descend';
+    if (form === 'a' || form === 'ha') {
+        parts.push(leg.altitude === prevAltitude
+            ? `Maintain ${altitudeWords(leg.altitude)}.`
+            : `${verb} to ${altitudeWords(leg.altitude)}.`);
     }
-    let time = ` For ${leg.duration} seconds.`;
-    if (remainingSec != null) {
-        time = remainingSec > 0 ? ` For ${remainingSec} more seconds.` : '';
+    if (form === 'hvt') {
+        parts.push(leg.vs === 0 ? 'Maintain level flight.' : `${verb} at ${leg.vs} feet per minute.`);
+        if (remainingSec == null) parts.push(`For ${leg.duration} seconds.`);
+        else if (remainingSec > 0) parts.push(`For ${remainingSec} more seconds.`);
     }
-    return `${lateral} ${vertical}${time}`;
+    return parts.join(' ');
 }
 
 // --- ideal (required) profile -------------------------------------------
