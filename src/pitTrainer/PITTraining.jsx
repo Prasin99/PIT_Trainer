@@ -7,6 +7,7 @@ import { createFlightState, stepFlight, angularDiff } from '../flightCore/flight
 import { buildFlightConfig } from '../flightCore/flightConfig';
 import { START, DEFAULT_COUNT, GAP_SEC, generateLegs, buildRequiredTrack, legLines, legSpeech, stepIdeal, advancePos } from './instructions';
 import { TrackView } from './TrackView';
+import { generateLevelLegs, POINTS } from './levels';
 import { speak, stopSpeech, pauseSpeech, resumeSpeech, isSpeaking, estimateSpeechSeconds, setSpeechLanguage, getSpeechLanguage } from './speech';
 
 const PANEL_WIDTH = 1180;
@@ -97,12 +98,19 @@ const TRACK_SAMPLE_SEC = 0.25;
  * and down with a touch of realistic inertia rather than snapping instantly.
  */
 export function PITTraining({ settings, onComplete, onExit }) {
-  const { instructionCount = DEFAULT_COUNT } = settings ?? {};
+  const { instructionCount = DEFAULT_COUNT, level = 'standard' } = settings ?? {};
+  const isLevel = level === 1 || level === 2 || level === 3;   // AUA level 1-3 (levels.js)
 
   // Instruction sequence (legs). The session lasts until the last one ends.
+  // Standard: instructions.js (unchanged). AUA levels: levels.js -- there an
+  // instruction can have several segments (legs with cont = true) that
+  // follow each other without the 10 s pause.
   const legsRef = useRef(null);
-  if (!legsRef.current) legsRef.current = generateLegs(instructionCount);
+  if (!legsRef.current) legsRef.current = isLevel ? generateLevelLegs(level, instructionCount) : generateLegs(instructionCount);
   const legs = legsRef.current;
+  // pause after leg j (none between segments of the same instruction)
+  const gapAfter = (j) => (j + 1 < legs.length ? (legs[j + 1].cont ? 0 : GAP_SEC) : 0);
+  const groupCount = isLevel ? legs[legs.length - 1].group + 1 : legs.length;
   // Full required chart, computed once (never shown during the test) --
   // it only fixes the map frame so the maps look like a printed chart.
   const headerLeftRef = useRef(null);   // overall timer value shown in the header
@@ -112,6 +120,7 @@ export function PITTraining({ settings, onComplete, onExit }) {
   const [lang, setLang] = useState(() => getSpeechLanguage());
   const langRef = useRef(lang);
   const speakSecs = useMemo(() => legs.map((leg, i) => {
+    if (leg.cont) return 0;                     // later segments are not announced
     const words = legSpeech(leg, i > 0 ? legs[i - 1].altitude : START.altitude, null, lang).trim().split(/\s+/).length;
     return words * 0.42 + 1;
   }), [legs, lang]);
@@ -152,7 +161,7 @@ export function PITTraining({ settings, onComplete, onExit }) {
   const [timing, setTiming] = useState(() => ({
     phase: 'fly',
     secondsLeft: legs[0].duration,
-    remaining: legs.reduce((sum, l, j) => sum + l.duration + (j + 1 < legs.length ? GAP_SEC : 0), 0),
+    remaining: legs.reduce((sum, l, j) => sum + l.duration + gapAfter(j), 0),
   }));
 
   // 'text' = instruction shown on screen; 'audio' = read aloud, text hidden.
@@ -168,7 +177,10 @@ export function PITTraining({ settings, onComplete, onExit }) {
     setLegIdx(i);
     legClockRef.current = 0;
     gapClockRef.current = 0;
-    if (instrModeRef.current === 'audio') {
+    if (legsRef.current[i].cont) {
+      // next segment of the same instruction: no announcement, no pause
+      legPhaseRef.current = 'fly';
+    } else if (instrModeRef.current === 'audio') {
       const text = legSpeech(legsRef.current[i], prevAltOf(i), null, langRef.current);
       legPhaseRef.current = 'announce';
       announceClockRef.current = 0;
@@ -186,6 +198,14 @@ export function PITTraining({ settings, onComplete, onExit }) {
     const leg = legsRef.current[i];
     if (!leg || legPhaseRef.current === 'announce') return;
     const left = legPhaseRef.current === 'gap' ? 0 : Math.max(0, Math.ceil(leg.duration - legClockRef.current));
+    if (leg.form === 'lvl') {
+      // AUA level: repeat the whole instruction; while a timed segment runs, say the time left
+      const lead = legsRef.current[leg.lead];
+      const isLast = !(legsRef.current[i + 1] && legsRef.current[i + 1].cont);
+      const rem = legPhaseRef.current === 'gap' ? 0 : leg.showTime && isLast ? left : null;
+      speak(legSpeech(lead, prevAltOf(leg.lead), rem, langRef.current));
+      return;
+    }
     speak(legSpeech(leg, prevAltOf(i), left, langRef.current));
   }, []);
 
@@ -288,6 +308,16 @@ export function PITTraining({ settings, onComplete, onExit }) {
   // Per-frame deviations from target, for the result page (scoring only).
   const samplesRef = useRef([]);
 
+  // AUA levels: compass-direction questions ("name the compass direction").
+  // answers[group] = index 0-15 of the button pressed (first answer counts).
+  const [answers, setAnswers] = useState({});
+  const answersRef = useRef({});
+  const answerQuestion = useCallback((group, idx) => {
+    if (answersRef.current[group] != null) return;
+    answersRef.current = { ...answersRef.current, [group]: idx };
+    setAnswers(answersRef.current);
+  }, []);
+
   useFlightLoop((dt) => {
     if (finishedRef.current) return;
 
@@ -326,6 +356,7 @@ export function PITTraining({ settings, onComplete, onExit }) {
       legClockRef.current += dt;
       if (legClockRef.current >= legs[li].duration) {
         if (li + 1 >= legs.length) lastDone = true;
+        else if (legs[li + 1].cont) { startLeg(li + 1); li = legIdxRef.current; }   // next segment, no pause
         else { legPhaseRef.current = 'gap'; gapClockRef.current = 0; }
       }
     } else {
@@ -374,8 +405,8 @@ export function PITTraining({ settings, onComplete, onExit }) {
       const leg = legs[legIdxRef.current];
       const cur = ph === 'announce' ? leg.duration
         : ph === 'fly' ? Math.max(0, leg.duration - legClockRef.current) : 0;
-      let rest = cur + (ph === 'gap' ? Math.max(0, GAP_SEC - gapClockRef.current) : (legIdxRef.current + 1 < legs.length ? GAP_SEC : 0));
-      for (let j = legIdxRef.current + 1; j < legs.length; j++) rest += legs[j].duration + (j + 1 < legs.length ? GAP_SEC : 0);
+      let rest = cur + (ph === 'gap' ? Math.max(0, GAP_SEC - gapClockRef.current) : gapAfter(legIdxRef.current));
+      for (let j = legIdxRef.current + 1; j < legs.length; j++) rest += legs[j].duration + gapAfter(j);
       // Overall test timer (header): keeps running while an instruction is
       // being spoken -- in Audio mode it also counts the expected speaking
       // time of the current and the remaining instructions.
@@ -406,6 +437,14 @@ export function PITTraining({ settings, onComplete, onExit }) {
         tolerance: { altitude: c.altitude.tolerance, heading: c.heading.tolerance, speed: c.speed.tolerance },
         targets: { altitude: c.altitude.target, heading: c.heading.target, speed: c.speed.target },
         legs,
+        level,
+        answers: legs.filter((l) => l.ask).map((l) => ({
+          group: l.group,
+          question: l.text,
+          correct: POINTS[l.ask.answer],
+          given: answersRef.current[l.group] != null ? POINTS[answersRef.current[l.group]] : null,
+          ok: answersRef.current[l.group] === l.ask.answer,
+        })),
         requiredTrack: requiredTrackRef.current,
         flownTrack: flownTrackRef.current,
       });
@@ -449,8 +488,11 @@ export function PITTraining({ settings, onComplete, onExit }) {
 
       <InstructionBar
         leg={legs[legIdx]}
-        index={legIdx}
-        total={legs.length}
+        index={isLevel ? legs[legIdx].group : legIdx}
+        total={groupCount}
+        lead={isLevel ? legs[legs[legIdx].lead] : null}
+        answers={answers}
+        onAnswer={answerQuestion}
         secondsLeft={timing.secondsLeft}
         legPhase={timing.phase}
         mode={instrMode}
@@ -513,60 +555,90 @@ export function PITTraining({ settings, onComplete, onExit }) {
  * (or "audio" mode: read aloud, text hidden), a Text/Audio toggle, and a
  * button to open the track view.
  */
-function InstructionBar({ leg, index, total, secondsLeft, legPhase, mode, onMode, lang, onLang, onRepeat, onViewTrack }) {
+// German labels for the Standard instruction lines (text mode, DE selected)
+const LABEL_DE = { Heading: 'Steuerkurs', 'Maintain heading': 'Steuerkurs halten', Altitude: 'Höhe', Time: 'Zeit', Turn: 'Kurve', VS: 'VS' };
+const valueDe = (v) => String(v).replace(/^Right /, 'Rechts ').replace(/^Left /, 'Links ');
+
+function InstructionBar({ leg, index, total, lead, answers, onAnswer, secondsLeft, legPhase, mode, onMode, lang, onLang, onRepeat, onViewTrack }) {
   // After the instruction's time is over there is a 5 s pause: hold heading/altitude.
   const holding = legPhase === 'gap';
   if (!leg) return null;
   const btn = (active) =>
     `px-3 py-1.5 text-sm font-semibold transition ${active ? 'bg-blue-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-100'}`;
+  const de = lang === 'de';
+  const ask = lead?.ask ? lead : null;               // AUA level: compass-direction question
+  const given = ask ? answers[ask.group] : null;
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2 bg-white border-b border-slate-300">
-      <div className="flex items-center gap-4 min-w-0">
-        <div className="text-xs text-slate-500 leading-tight">
-          <div className="font-semibold uppercase tracking-wide">Instruction</div>
-          <div>{index + 1} / {total}</div>
-        </div>
-        {mode === 'text' ? (
-          <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-slate-900">
-            {legLines(leg).map(({ label, value }) => (
-              <div key={label} className="whitespace-nowrap">
-                <span className="text-sm font-semibold text-slate-500 mr-2">{label}</span>
-                <span className="text-xl font-bold">{value}</span>
+    <div className="bg-white border-b border-slate-300">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2">
+        <div className="flex items-center gap-4 min-w-0">
+          <div className="text-xs text-slate-500 leading-tight">
+            <div className="font-semibold uppercase tracking-wide">{de ? 'Anweisung' : 'Instruction'}</div>
+            <div>{index + 1} / {total}</div>
+          </div>
+          {mode === 'text' ? (
+            lead ? (
+              // AUA level: the instruction as one sentence, in the chosen language
+              <div className="text-lg font-bold text-slate-900">{lead.text[lang] ?? lead.text.en}</div>
+            ) : (
+              <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-slate-900">
+                {legLines(leg).map(({ label, value }) => (
+                  <div key={label} className="whitespace-nowrap">
+                    <span className="text-sm font-semibold text-slate-500 mr-2">{de ? (LABEL_DE[label] ?? label) : label}</span>
+                    <span className="text-xl font-bold">{de ? valueDe(value) : value}</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        ) : (
-          <div className="flex items-center gap-3 text-slate-700">
-            <span className="text-xl" aria-hidden>🔊</span>
-            <span className="font-semibold">Audio instruction</span>
-            <button onClick={onRepeat} className="px-3 py-1 text-sm border border-slate-300 rounded hover:bg-slate-100">
-              Repeat
-            </button>
-            {/* Audio language */}
-            <div className="flex rounded border border-slate-300 overflow-hidden" role="group" aria-label="Audio language">
-              <button className={btn(lang === 'en')} onClick={() => onLang('en')} title="English">EN</button>
-              <button className={btn(lang === 'de')} onClick={() => onLang('de')} title="Deutsch">DE</button>
+            )
+          ) : (
+            <div className="flex items-center gap-3 text-slate-700">
+              <span className="text-xl" aria-hidden>🔊</span>
+              <span className="font-semibold">{de ? 'Audio-Anweisung' : 'Audio instruction'}</span>
+              <button onClick={onRepeat} className="px-3 py-1 text-sm border border-slate-300 rounded hover:bg-slate-100">
+                {de ? 'Wiederholen' : 'Repeat'}
+              </button>
             </div>
-          </div>
-        )}
-      </div>
-
-      <div className="flex items-center gap-3">
-        {/* During the 5 s pause after an instruction's time, no countdown is shown. */}
-        {/* No countdown when the instruction gives no time. */}
-        {!holding && leg.showTime !== false && (
-          <div className="font-mono text-sm px-3 py-1 rounded bg-slate-100 text-slate-800 whitespace-nowrap">
-            Time left {secondsLeft}s
-          </div>
-        )}
-        <div className="flex rounded border border-slate-300 overflow-hidden" role="group" aria-label="Instruction mode">
-          <button className={btn(mode === 'text')} onClick={() => onMode('text')}>Text</button>
-          <button className={btn(mode === 'audio')} onClick={() => onMode('audio')}>Audio</button>
+          )}
         </div>
-        <button onClick={onViewTrack} className="px-3 py-1.5 text-sm font-semibold border border-slate-300 rounded bg-white text-slate-700 hover:bg-slate-100">
-          View track
-        </button>
+
+        <div className="flex items-center gap-3">
+          {/* During the 5 s pause after an instruction's time, no countdown is shown. */}
+          {/* No countdown when the instruction gives no time. */}
+          {!holding && leg.showTime !== false && (
+            <div className="font-mono text-sm px-3 py-1 rounded bg-slate-100 text-slate-800 whitespace-nowrap">
+              {de ? 'Restzeit' : 'Time left'} {secondsLeft}s
+            </div>
+          )}
+          {/* Language of the instructions (text and audio) */}
+          <div className="flex rounded border border-slate-300 overflow-hidden" role="group" aria-label="Language">
+            <button className={btn(lang === 'en')} onClick={() => onLang('en')} title="English">EN</button>
+            <button className={btn(lang === 'de')} onClick={() => onLang('de')} title="Deutsch">DE</button>
+          </div>
+          <div className="flex rounded border border-slate-300 overflow-hidden" role="group" aria-label="Instruction mode">
+            <button className={btn(mode === 'text')} onClick={() => onMode('text')}>Text</button>
+            <button className={btn(mode === 'audio')} onClick={() => onMode('audio')}>Audio</button>
+          </div>
+          <button onClick={onViewTrack} className="px-3 py-1.5 text-sm font-semibold border border-slate-300 rounded bg-white text-slate-700 hover:bg-slate-100">
+            {de ? 'Track ansehen' : 'View track'}
+          </button>
+        </div>
       </div>
+      {ask && (
+        // Compass-direction answer: the first button pressed counts.
+        <div className="flex flex-wrap items-center gap-2 px-4 pb-2">
+          <span className="text-sm font-semibold text-slate-600 mr-1">
+            {given == null ? (de ? 'Himmelsrichtung:' : 'Compass direction:') : (de ? 'Ihre Antwort:' : 'Your answer:')}
+          </span>
+          {POINTS.map((p) => (
+            <button key={p.i} disabled={given != null} onClick={() => onAnswer(ask.group, p.i)}
+              className={`min-w-[2.6rem] px-1.5 py-1 text-xs font-bold rounded border transition ${given === p.i
+                ? 'bg-blue-600 text-white border-blue-600'
+                : given != null ? 'bg-white text-slate-300 border-slate-200' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'}`}>
+              {de ? p.de : p.en}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

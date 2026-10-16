@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { DEFAULT_COUNT, estimateDuration } from './instructions';
 import { primeSpeech } from './speech';
+import { LEVEL_INFO, estimateLevelDuration } from './levels';
 
 /**
  * PIT (Panel Instrument Test) description / setup screen.
@@ -72,7 +73,9 @@ function InfoRow({ title, tag, description, control }) {
 
 export function PITSetup({ onStart, onBack }) {
   const [count, setCount] = useState(DEFAULT_COUNT);
-  const est = estimateDuration(count);
+  const [level, setLevel] = useState('standard');      // 'standard' | 1 | 2 | 3
+  const est = useMemo(() => (level === 'standard' ? estimateDuration(count) : estimateLevelDuration(level, count)), [level, count]);
+  const info = LEVEL_INFO.find((l) => l.id === level);
   const minutes = Math.floor(est / 60);
   const seconds = String(est % 60).padStart(2, '0');
 
@@ -119,9 +122,10 @@ export function PITSetup({ onStart, onBack }) {
             <h2 className="font-semibold text-slate-800 mt-5 mb-2">How the instruments work together</h2>
             <ul className="text-sm text-slate-600 space-y-1 list-disc pl-5">
               <li>
-                <span className="font-semibold text-slate-800">Instructions:</span> a new heading (or a turn such as
-                "Turn right 360°"), altitude and vertical speed is given for a set time (e.g. 20 s). When the time is over, the next
-                instruction follows. Choose <span className="font-semibold">Text</span> or{' '}
+                <span className="font-semibold text-slate-800">Instructions:</span> each one is either a heading only
+                (or a turn such as "Turn right 360°"), an altitude only, a heading + altitude, or a heading + vertical
+                speed, always for a set time (e.g. "Heading 320°, 20 s" or "Heading 320°, climb 1000 ft/min, 18 s"). Keep everything that is not mentioned
+                as it is. The next instruction follows 10 s after the previous one. Choose <span className="font-semibold">Text</span> or{' '}
                 <span className="font-semibold">Audio</span> at the top of the screen;{' '}
                 <span className="font-semibold">View track</span> shows your track vs. the required one.
               </li>
@@ -184,13 +188,31 @@ export function PITSetup({ onStart, onBack }) {
                 </p>
               </div>
             </div>
+            {/* Instruction level: Standard or AUA level 1 / 2 / 3 */}
+            <div className="mt-3">
+              <div className="font-semibold text-slate-800 mb-1">Level</div>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                {LEVEL_INFO.map((l) => (
+                  <button key={l.id} type="button" onClick={() => setLevel(l.id)}
+                    className={`text-left rounded border px-3 py-1.5 transition ${level === l.id
+                      ? 'border-blue-600 bg-blue-50 ring-1 ring-blue-600' : 'border-slate-200 bg-white hover:bg-slate-50'}`}>
+                    <div className="font-semibold text-slate-900 text-sm">{l.title}</div>
+                    <div className="text-[11px] text-slate-500 leading-tight">{l.subtitle}</div>
+                  </button>
+                ))}
+              </div>
+              <ul className="mt-1.5 text-[11px] leading-snug text-slate-600 list-disc pl-5">
+                {info.rules.map((r) => <li key={r}>{r}</li>)}
+              </ul>
+            </div>
+
           </section>
         </div>
 
-        <div className="mt-6 flex justify-center xl:mt-0 xl:absolute xl:left-0 xl:right-0 xl:bottom-5">
+        <div className="mt-6 flex justify-center xl:mt-3 xl:shrink-0">
           <button
             type="button"
-            onClick={() => { primeSpeech(); onStart({ instructionCount: count }); }}
+            onClick={() => { primeSpeech(); onStart({ instructionCount: count, level }); }}
             className="px-16 py-3 rounded bg-blue-600 hover:bg-blue-700 text-white font-semibold text-base transition shadow"
           >
             ▶ Start

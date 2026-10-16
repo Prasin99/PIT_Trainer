@@ -40,8 +40,12 @@ export function PITSummary({ result, onTryAgain, onDone }) {
     );
   }
 
-  const { duration, samples, tolerance = {}, targets = {}, legs = [], requiredTrack = [], flownTrack = [] } = result;
+  const { duration, samples, tolerance = {}, targets = {}, legs = [], requiredTrack = [], flownTrack = [], level = 'standard', answers = [] } = result;
   const perInstruction = legs.length > 0;
+  // instructions (an AUA-level instruction can consist of several segments)
+  const instructionCount = legs.filter((l) => !l.cont).length;
+  const levelName = level === 1 || level === 2 || level === 3 ? `Level ${level}` : 'Standard';
+  const answeredOk = answers.filter((a) => a.ok).length;
 
   const rows = [
     { key: 'altitude', label: 'Altimeter', target: perInstruction ? 'per instruction' : `${Math.round(targets.altitude ?? 500)} ft`, devKey: 'altitudeDev', unit: 'ft', t: tolerance.altitude ?? { green: 20, yellow: 50 } },
@@ -65,7 +69,7 @@ export function PITSummary({ result, onTryAgain, onDone }) {
         <header className="mb-8">
           <h1 className="text-3xl font-bold">PIT Session Summary</h1>
           <p className="text-slate-300 mt-2">
-            Panel Instrument Test · Duration: {formatDuration(duration)}
+            Panel Instrument Test · {levelName} · Duration: {formatDuration(duration)}
           </p>
         </header>
 
@@ -112,11 +116,40 @@ export function PITSummary({ result, onTryAgain, onDone }) {
           </p>
         </section>
 
+        {answers.length > 0 && (
+          <section className="mb-8">
+            <h2 className="text-xl font-semibold mb-1">Compass-direction questions</h2>
+            <p className="text-sm text-slate-400 mb-4">{answeredOk} of {answers.length} correct</p>
+            <div className="overflow-hidden rounded-xl border border-slate-700">
+              <table className="w-full text-sm border-collapse">
+                <thead className="bg-slate-800 text-slate-300">
+                  <tr>
+                    <th className="text-left p-3">Instruction</th>
+                    <th className="text-right p-3">Correct</th>
+                    <th className="text-right p-3">Your answer</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {answers.map((a) => (
+                    <tr key={a.group} className="border-t border-slate-700">
+                      <td className="p-3">{a.group + 1}. {a.question?.en}</td>
+                      <td className="text-right p-3 text-slate-300">{a.correct?.en}</td>
+                      <td className={`text-right p-3 font-semibold ${a.ok ? 'text-green-400' : 'text-red-400'}`}>
+                        {a.given ? a.given.en : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
         {perInstruction && requiredTrack.length > 1 && (
           <section className="mb-8">
             <h2 className="text-xl font-semibold mb-1">Track</h2>
             <p className="text-sm text-slate-400 mb-4">
-              Top: the track required by the {legs.length} instructions. Bottom: the track you flew
+              Top: the track required by the {instructionCount} instructions. Bottom: the track you flew
               (same scale, so you can compare them directly).
             </p>
             <div className="overflow-x-auto">

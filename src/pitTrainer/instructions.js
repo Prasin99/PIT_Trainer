@@ -170,14 +170,14 @@ export function generateLegs(count = DEFAULT_COUNT, rng = Math.random) {
         let legDuration = duration ?? best.duration;
         if (form === 'a' || form === 'ha') {
             const need = Math.ceil((Math.abs(altitude - alt) / ALT_RATE) * 60);
-            legDuration = Math.max(legDuration, need + 4);
+            legDuration = Math.ceil(Math.max(legDuration, need + 4) / 5) * 5;   // whole 5 s, it is announced
         }
 
         const leg = {
             form, type: best.type, heading: best.heading, headingLabel: best.headingLabel, turn: best.turn,
             altitude, altChange: altitude - alt, vs: altitude === alt ? 0 : vs,
             duration: legDuration, startT: t,
-            showVs: form === 'hvt', showTime: form === 'hvt',
+            showVs: form === 'hvt', showTime: true,   // every instruction says for how long
         };
         legs.push(leg);
 
@@ -260,6 +260,7 @@ export function estimateDuration(count) {
  *   hvt -> Heading 320° / VS +1000ft/min / Time 18 s
  */
 export function legLines(leg) {
+    if (leg.form === 'lvl') return [{ label: '', value: leg.text.en }];   // AUA level instruction (levels.js)
     const form = leg.form || 'ha';
     if (form === 'm') {
         return [
@@ -278,15 +279,16 @@ export function legLines(leg) {
     if (form === 'hvt') {
         const sign = leg.altChange > 0 ? '+' : leg.altChange < 0 ? '−' : '';
         lines.push({ label: 'VS', value: `${sign}${leg.vs}ft/min` });
-        lines.push({ label: 'Time', value: `${leg.duration} s` });
     }
+    lines.push({ label: 'Time', value: `${leg.duration} s` });
     return lines;
 }
 
 /** Short label for the map, like the chart: "145°", "145° / 18″", "+270°" or "3500ft". */
 export function legMapLabel(leg) {
+    if (leg.form === 'lvl') return leg.mapLabel;                          // AUA level instruction (levels.js)
     if (leg.type === 'turn') return `${leg.turn > 0 ? '+' : '−'}${Math.abs(leg.turn)}°`;
-    if (leg.form === 'a') return `${leg.altitude}ft`;
+    if (leg.form === 'a') return `${leg.altitude}ft / ${leg.duration}″`;
     if (leg.showTime === false) return leg.headingLabel;
     return `${leg.headingLabel} / ${leg.duration}″`;
 }
@@ -313,6 +315,7 @@ function altitudeWords(ft) {
  * ("For 15 more seconds"); 0 = the time is already over, so no time is said.
  */
 export function legSpeech(leg, prevAltitude, remainingSec = null, lang = 'en') {
+    if (leg.form === 'lvl') return leg.speech(lang, remainingSec);         // AUA level instruction (levels.js)
     if (lang === 'de') return legSpeechDe(leg, prevAltitude, remainingSec);
     const form = leg.form || 'ha';
     if (form === 'm') {
@@ -337,9 +340,9 @@ export function legSpeech(leg, prevAltitude, remainingSec = null, lang = 'en') {
     }
     if (form === 'hvt') {
         parts.push(leg.vs === 0 ? 'Maintain level flight.' : `${verb} at ${leg.vs} feet per minute.`);
-        if (remainingSec == null) parts.push(`For ${leg.duration} seconds.`);
-        else if (remainingSec > 0) parts.push(`For ${remainingSec} more seconds.`);
     }
+    if (remainingSec == null) parts.push(`For ${leg.duration} seconds.`);
+    else if (remainingSec > 0) parts.push(`For ${remainingSec} more seconds.`);
     return parts.join(' ');
 }
 
@@ -379,8 +382,8 @@ function legSpeechDe(leg, prevAltitude, remainingSec) {
     }
     if (form === 'hvt') {
         parts.push(leg.vs === 0 ? 'Horizontalflug halten.' : `${up ? 'Steigen' : 'Sinken'} mit ${leg.vs} Fuß pro Minute.`);
-        if (time) parts.push(time);
     }
+    if (time) parts.push(time);
     return parts.join(' ');
 }
 
