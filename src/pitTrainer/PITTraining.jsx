@@ -27,7 +27,8 @@ const MAX_BANK_DEG = 40; // full turn rate = 45° bank (was 30°)
 const VSI_DISPLAY_LAG = 2.0;
 const BANK_RETURN_LAG = 1.0;
 const BANK_INTO_LAG = 0.15;   // banking into a turn (s)
-const MAX_PITCH_DEG = 7;   // nose up/down at full vertical speed (2000 ft/min)
+//const MAX_PITCH_DEG = 7;   // nose up/down at full vertical speed (2000 ft/min)
+const MAX_PITCH_DEG = 25;  // nose up/down at full stick (full climb / descent rate)
 const BANK_MAX_RATE = 35;   // max horizon rotation speed (degrees per second)
 
 // RPM Indicator scale (must match flightCore/instruments/TachometerDial.jsx).
@@ -244,7 +245,8 @@ export function PITTraining({ settings, onComplete, onExit }) {
       speed: s.speed,
       // ft/s -> ft/min -> the gauge's x100 units
       vspeed: Math.max(-20, Math.min(20, (vsiRef.current * 60) / 100)),
-      pitch: Math.max(-MAX_PITCH_DEG, Math.min(MAX_PITCH_DEG, ((vsiRef.current * 60) / 2000) * MAX_PITCH_DEG)),
+      //pitch: Math.max(-MAX_PITCH_DEG, Math.min(MAX_PITCH_DEG, ((vsiRef.current * 60) / 2000) * MAX_PITCH_DEG)),
+      pitch: Math.max(-MAX_PITCH_DEG, Math.min(MAX_PITCH_DEG, (vsiRef.current / cfgRef.current.altitude.gainPitch) * MAX_PITCH_DEG)),
       // Same signal that moves the Compass, rescaled into a bank angle so
       // the AI visibly "causes" what the compass is doing. No pitch term
       // here on purpose — the AI stays level regardless of climb/descent.

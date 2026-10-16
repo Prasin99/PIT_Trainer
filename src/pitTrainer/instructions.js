@@ -89,10 +89,28 @@ export function generateLegs(count = DEFAULT_COUNT, rng = Math.random) {
         const isTurn = turnAt.has(i);
         const hdg = ideal.heading;
 
+        // First instruction: always maintain level flight and the current
+        // heading for 15 or 20 s ('m').
+        if (i === 0) {
+            const leg = {
+                form: 'm', type: 'heading', heading: hdg, headingLabel: fmtHdg(hdg), turn: 0,
+                altitude: alt, altChange: 0, vs: 0,
+                duration: rng() < 0.5 ? 15 : 20, startT: t,
+                showVs: false, showTime: true,
+            };
+            legs.push(leg);
+            const dt = 0.1;
+            for (let k = 0; k < Math.round((leg.duration + GAP_SEC) / dt); k++) {
+                stepIdeal(ideal, leg, dt);
+                if (k % 3 === 0) path.push({ x: ideal.x, y: ideal.y });
+            }
+            t += leg.duration + GAP_SEC;
+            continue;
+        }
+
         // Which kind of instruction? (turns: heading only or heading + altitude)
         let form;
-        if (i === 0) form = 'hvt';
-        else if (isTurn) form = rng() < 0.5 ? 'h' : 'ha';
+        if (isTurn) form = rng() < 0.5 ? 'h' : 'ha';
         else form = pick(FORMS, rng);
 
         // never two "altitude only" in a row, never the same form 3x in a row
@@ -243,6 +261,13 @@ export function estimateDuration(count) {
  */
 export function legLines(leg) {
     const form = leg.form || 'ha';
+    if (form === 'm') {
+        return [
+            { label: 'Maintain heading', value: leg.headingLabel },
+            { label: 'Altitude', value: `${leg.altitude}ft` },
+            { label: 'Time', value: `${leg.duration} s` },
+        ];
+    }
     const lines = [];
     if (form !== 'a') {
         lines.push(leg.type === 'turn'
@@ -289,6 +314,12 @@ function altitudeWords(ft) {
  */
 export function legSpeech(leg, prevAltitude, remainingSec = null) {
     const form = leg.form || 'ha';
+    if (form === 'm') {
+        const hdg = NAME_WORDS[leg.headingLabel] ?? digitsOf(leg.heading);
+        let time = ` For ${leg.duration} seconds.`;
+        if (remainingSec != null) time = remainingSec > 0 ? ` For ${remainingSec} more seconds.` : '';
+        return `Maintain heading ${hdg}. Maintain level flight at ${altitudeWords(leg.altitude)}.${time}`;
+    }
     const parts = [];
     if (form !== 'a') {
         if (leg.type === 'turn') {

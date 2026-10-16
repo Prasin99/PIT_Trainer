@@ -13,21 +13,26 @@ import React, { useMemo } from 'react';
 export function AttitudeIndicator({ pitch = 0, bank = 0, size = 260, inactive = false }) {
   const cx = size / 2, cy = size / 2, r = size / 2 - 4;
   // Pitch-ladder spacing matched to the PIT reference dial (5° steps up to
-  // ±20°). PIT never pitches the horizon (pitch stays 0), so this only sets
-  // where the ladder lines are drawn.
-  const pxPerDeg = r / 26;
+  // ±25°). The ladder is drawn a bit tighter (ladderPxPerDeg) so the 20
+  // and 25 lines fit inside the dial; how far the horizon moves for a given
+  // pitch (pxPerDeg) is unchanged.
+  //const pxPerDeg = r / 26;
+  const ladderPxPerDeg = r / 38;
 
   const clipId = useMemo(() => `ai-clip-${Math.random().toString(36).slice(2)}`, []);
 
   // Pitch bars: [offsetDeg, labeled, halfWidthFrac]
   const bars = [
+    { deg: 25, labeled: true, w: 0.06 },
+    { deg: 20, labeled: true, w: 0.22 },
     { deg: 15, labeled: true, w: 0.06 },
     { deg: 10, labeled: true, w: 0.22 },
     { deg: 5, labeled: true, w: 0.06 },
     { deg: -5, labeled: true, w: 0.06 },
     { deg: -10, labeled: true, w: 0.22 },
     { deg: -15, labeled: true, w: 0.06 },
-    { deg: -20, labeled: false, w: 0.25 },
+    { deg: -20, labeled: true, w: 0.22 },
+    { deg: -25, labeled: true, w: 0.06 },
   ];
 
   const bankTicks = [-60, -45, -30, -20, -10, 0, 10, 20, 30, 45, 60];
@@ -52,7 +57,7 @@ export function AttitudeIndicator({ pitch = 0, bank = 0, size = 260, inactive = 
             horizon (fixed to the world) then appears to rotate the opposite
             way relative to the case, so we rotate by -bank. */}
         <g clipPath={`url(#${clipId})`}>
-          <g transform={`rotate(${-bank} ${cx} ${cy}) translate(0 ${pitch * pxPerDeg})`}>
+          <g transform={`rotate(${-bank} ${cx} ${cy}) translate(0 ${pitch * ladderPxPerDeg})`}>
             {/* Sky + ground, oversized so rotation never reveals a corner */}
             <rect x={cx - size} y={cy - size * 1.6} width={size * 2} height={size * 1.6} fill="#0f6fd6" />
             <rect x={cx - size} y={cy} width={size * 2} height={size * 1.6} fill="#a8672f" />
@@ -63,7 +68,7 @@ export function AttitudeIndicator({ pitch = 0, bank = 0, size = 260, inactive = 
 
             {/* Pitch reference bars */}
             {bars.map(({ deg, labeled, w }) => {
-              const y = cy - deg * pxPerDeg;
+              const y = cy - deg * ladderPxPerDeg;
               const half = (size * w) / 2;
               return (
                 <g key={deg}>
