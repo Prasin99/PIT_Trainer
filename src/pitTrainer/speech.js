@@ -19,6 +19,10 @@
 
 const hasSpeech = () => typeof window !== 'undefined' && 'speechSynthesis' in window;
 
+// Spoken language: 'en' (English) or 'de' (German). Switched with
+// setSpeechLanguage(); English is the default.
+let lang = 'en';
+
 // Higher score = preferred. Checked against the voice name.
 const PREFERRED = [
     [/Google UK English Female/i, 100],
@@ -30,9 +34,27 @@ const PREFERRED = [
     [/Microsoft (Zira|David|Hazel|George)/i, 50],
 ];
 
+// German voices, same idea.
+const PREFERRED_DE = [
+    [/Google Deutsch/i, 100],
+    [/(Katja|Conrad|Amala|Killian|Seraphina|Florian).*Natural/i, 88], // Microsoft Edge natural voices
+    [/Natural|Neural|Premium|Enhanced/i, 80],
+    [/^(Anna|Petra|Markus|Yannick|Helena|Martin)\b/i, 70],            // macOS / iOS voices
+    [/Microsoft (Hedda|Katja|Stefan)/i, 50],
+];
+
 let chosenVoice = null;
 
 function scoreVoice(v) {
+    if (lang === 'de') {
+        if (!/^de(-|_|$)/i.test(v.lang)) return -1;
+        let score = 10;
+        for (const [re, s] of PREFERRED_DE) {
+            if (re.test(v.name)) { score = Math.max(score, s); }
+        }
+        if (/de-DE/i.test(v.lang)) score += 2;
+        return score;
+    }
     if (!/^en(-|_|$)/i.test(v.lang)) return -1;
     let score = 10;
     for (const [re, s] of PREFERRED) {
@@ -60,6 +82,18 @@ function pickVoice() {
 if (hasSpeech()) {
     pickVoice();
     window.speechSynthesis.addEventListener?.('voiceschanged', pickVoice);
+}
+
+/** Switch the spoken language ('en' | 'de'); used from the next sentence spoken. */
+export function setSpeechLanguage(l) {
+    lang = l === 'de' ? 'de' : 'en';
+    chosenVoice = null;
+    pickVoice();
+}
+
+/** Current spoken language ('en' | 'de'). */
+export function getSpeechLanguage() {
+    return lang;
 }
 
 const splitSentences = (text) => String(text).split(/(?<=\.)\s+/).filter(Boolean);
@@ -91,7 +125,7 @@ function enqueueFrom(from) {
     live = [];
     for (let k = from; k < queue.length; k++) {
         const u = new SpeechSynthesisUtterance(queue[k]);
-        if (voice) { u.voice = voice; u.lang = voice.lang; } else { u.lang = 'en-GB'; }
+        if (voice) { u.voice = voice; u.lang = voice.lang; } else { u.lang = lang === 'de' ? 'de-DE' : 'en-GB'; }
         u.rate = 0.88;   // a bit slower than normal = easier to follow
         u.pitch = 1.0;
         u.volume = 1.0;

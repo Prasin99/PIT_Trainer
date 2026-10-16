@@ -7,7 +7,7 @@ import { createFlightState, stepFlight, angularDiff } from '../flightCore/flight
 import { buildFlightConfig } from '../flightCore/flightConfig';
 import { START, DEFAULT_COUNT, GAP_SEC, generateLegs, buildRequiredTrack, legLines, legSpeech, stepIdeal, advancePos } from './instructions';
 import { TrackView } from './TrackView';
-import { speak, stopSpeech, pauseSpeech, resumeSpeech, isSpeaking, estimateSpeechSeconds } from './speech';
+import { speak, stopSpeech, pauseSpeech, resumeSpeech, isSpeaking, estimateSpeechSeconds, setSpeechLanguage, getSpeechLanguage } from './speech';
 
 const PANEL_WIDTH = 1180;
 const PANEL_HEIGHT = 880;
@@ -27,7 +27,6 @@ const MAX_BANK_DEG = 40; // full turn rate = 45° bank (was 30°)
 const VSI_DISPLAY_LAG = 2.0;
 const BANK_RETURN_LAG = 1.0;
 const BANK_INTO_LAG = 0.15;   // banking into a turn (s)
-//const MAX_PITCH_DEG = 7;   // nose up/down at full vertical speed (2000 ft/min)
 const MAX_PITCH_DEG = 25;  // nose up/down at full stick (full climb / descent rate)
 const BANK_MAX_RATE = 35;   // max horizon rotation speed (degrees per second)
 
@@ -108,10 +107,14 @@ export function PITTraining({ settings, onComplete, onExit }) {
   // it only fixes the map frame so the maps look like a printed chart.
   const headerLeftRef = useRef(null);   // overall timer value shown in the header
   // Expected speaking time of each instruction (for the overall timer in Audio mode).
+  // Audio language: 'en' (English) or 'de' (German), switched in the instruction bar.
+  // Starts with the language chosen last time (English the first time).
+  const [lang, setLang] = useState(() => getSpeechLanguage());
+  const langRef = useRef(lang);
   const speakSecs = useMemo(() => legs.map((leg, i) => {
-    const words = legSpeech(leg, i > 0 ? legs[i - 1].altitude : START.altitude).trim().split(/\s+/).length;
+    const words = legSpeech(leg, i > 0 ? legs[i - 1].altitude : START.altitude, null, lang).trim().split(/\s+/).length;
     return words * 0.42 + 1;
-  }), [legs]);
+  }), [legs, lang]);
   const fullRequiredRef = useRef(null);
   if (!fullRequiredRef.current) fullRequiredRef.current = buildRequiredTrack(legs);
 
@@ -166,7 +169,7 @@ export function PITTraining({ settings, onComplete, onExit }) {
     legClockRef.current = 0;
     gapClockRef.current = 0;
     if (instrModeRef.current === 'audio') {
-      const text = legSpeech(legsRef.current[i], prevAltOf(i));
+      const text = legSpeech(legsRef.current[i], prevAltOf(i), null, langRef.current);
       legPhaseRef.current = 'announce';
       announceClockRef.current = 0;
       announceDoneRef.current = false;
@@ -183,7 +186,7 @@ export function PITTraining({ settings, onComplete, onExit }) {
     const leg = legsRef.current[i];
     if (!leg || legPhaseRef.current === 'announce') return;
     const left = legPhaseRef.current === 'gap' ? 0 : Math.max(0, Math.ceil(leg.duration - legClockRef.current));
-    speak(legSpeech(leg, prevAltOf(i), left));
+    speak(legSpeech(leg, prevAltOf(i), left, langRef.current));
   }, []);
 
   const setMode = useCallback((m) => {
@@ -199,6 +202,27 @@ export function PITTraining({ settings, onComplete, onExit }) {
     }
   }, []);
   useEffect(() => () => stopSpeech(), []);
+
+  // Switch the audio language (English / German). Applies to everything
+  // spoken from now on. If the current instruction is being read out at
+  // this moment, it is read again in the new language (its time still
+  // starts when the voice has finished); when paused, it continues in the
+  // new language on resume.
+  const changeLanguage = useCallback((l) => {
+    if (l === langRef.current) return;
+    langRef.current = l;
+    setLang(l);
+    setSpeechLanguage(l);
+    if (instrModeRef.current !== 'audio' || legPhaseRef.current !== 'announce') return;
+    const i = legIdxRef.current;
+    const text = legSpeech(legsRef.current[i], prevAltOf(i), null, l);
+    const wasPaused = !runningRef.current;   // test paused right now
+    announceClockRef.current = 0;
+    announceDoneRef.current = false;
+    announceLimitRef.current = estimateSpeechSeconds(text);
+    speak(text, () => { announceDoneRef.current = true; });
+    if (wasPaused) pauseSpeech();
+  }, []);
 
   // Pause (button or track view) stops the audio at once; on resume the
   // current instruction is read again in Audio mode.
@@ -245,7 +269,6 @@ export function PITTraining({ settings, onComplete, onExit }) {
       speed: s.speed,
       // ft/s -> ft/min -> the gauge's x100 units
       vspeed: Math.max(-20, Math.min(20, (vsiRef.current * 60) / 100)),
-      //pitch: Math.max(-MAX_PITCH_DEG, Math.min(MAX_PITCH_DEG, ((vsiRef.current * 60) / 2000) * MAX_PITCH_DEG)),
       pitch: Math.max(-MAX_PITCH_DEG, Math.min(MAX_PITCH_DEG, (vsiRef.current / cfgRef.current.altitude.gainPitch) * MAX_PITCH_DEG)),
       // Same signal that moves the Compass, rescaled into a bank angle so
       // the AI visibly "causes" what the compass is doing. No pitch term
@@ -432,6 +455,8 @@ export function PITTraining({ settings, onComplete, onExit }) {
         legPhase={timing.phase}
         mode={instrMode}
         onMode={setMode}
+        lang={lang}
+        onLang={changeLanguage}
         onRepeat={() => { if (runningRef.current) repeatCurrent(); }}
         onViewTrack={openTrack}
       />
@@ -461,8 +486,7 @@ export function PITTraining({ settings, onComplete, onExit }) {
               </button>
             </div>
             <TrackView
-              //required={requiredTrackRef.current}
-              required={fullRequiredRef.current}
+              required={fullRequiredRef.current}   // left: the full final required track
               flown={flownTrackRef.current}
               legs={legs}
               frame={fullRequiredRef.current}
@@ -489,7 +513,7 @@ export function PITTraining({ settings, onComplete, onExit }) {
  * (or "audio" mode: read aloud, text hidden), a Text/Audio toggle, and a
  * button to open the track view.
  */
-function InstructionBar({ leg, index, total, secondsLeft, legPhase, mode, onMode, onRepeat, onViewTrack }) {
+function InstructionBar({ leg, index, total, secondsLeft, legPhase, mode, onMode, lang, onLang, onRepeat, onViewTrack }) {
   // After the instruction's time is over there is a 5 s pause: hold heading/altitude.
   const holding = legPhase === 'gap';
   if (!leg) return null;
@@ -518,13 +542,19 @@ function InstructionBar({ leg, index, total, secondsLeft, legPhase, mode, onMode
             <button onClick={onRepeat} className="px-3 py-1 text-sm border border-slate-300 rounded hover:bg-slate-100">
               Repeat
             </button>
+            {/* Audio language */}
+            <div className="flex rounded border border-slate-300 overflow-hidden" role="group" aria-label="Audio language">
+              <button className={btn(lang === 'en')} onClick={() => onLang('en')} title="English">EN</button>
+              <button className={btn(lang === 'de')} onClick={() => onLang('de')} title="Deutsch">DE</button>
+            </div>
           </div>
         )}
       </div>
 
       <div className="flex items-center gap-3">
         {/* During the 5 s pause after an instruction's time, no countdown is shown. */}
-        {!holding && (
+        {/* No countdown when the instruction gives no time. */}
+        {!holding && leg.showTime !== false && (
           <div className="font-mono text-sm px-3 py-1 rounded bg-slate-100 text-slate-800 whitespace-nowrap">
             Time left {secondsLeft}s
           </div>

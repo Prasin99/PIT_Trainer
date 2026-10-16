@@ -312,7 +312,8 @@ function altitudeWords(ft) {
  * remainingSec (optional, for "Repeat"): say the time that is LEFT
  * ("For 15 more seconds"); 0 = the time is already over, so no time is said.
  */
-export function legSpeech(leg, prevAltitude, remainingSec = null) {
+export function legSpeech(leg, prevAltitude, remainingSec = null, lang = 'en') {
+    if (lang === 'de') return legSpeechDe(leg, prevAltitude, remainingSec);
     const form = leg.form || 'ha';
     if (form === 'm') {
         const hdg = NAME_WORDS[leg.headingLabel] ?? digitsOf(leg.heading);
@@ -338,6 +339,47 @@ export function legSpeech(leg, prevAltitude, remainingSec = null) {
         parts.push(leg.vs === 0 ? 'Maintain level flight.' : `${verb} at ${leg.vs} feet per minute.`);
         if (remainingSec == null) parts.push(`For ${leg.duration} seconds.`);
         else if (remainingSec > 0) parts.push(`For ${remainingSec} more seconds.`);
+    }
+    return parts.join(' ');
+}
+
+// German version (same content). Headings digit by digit as in German
+// radio telephony ("zwo" for 2); altitudes as numbers ("3500 Fuß").
+const DIGITS_DE = ['null', 'eins', 'zwo', 'drei', 'vier', 'fünf', 'sechs', 'sieben', 'acht', 'neun'];
+const NAME_WORDS_DE = { N: 'Nord', NE: 'Nordost', E: 'Ost', SE: 'Südost', S: 'Süd', SW: 'Südwest', W: 'West', NW: 'Nordwest' };
+
+function headingWordsDe(leg) {
+    return NAME_WORDS_DE[leg.headingLabel]
+        ?? String(Math.round(leg.heading)).padStart(3, '0').split('').map((d) => DIGITS_DE[Number(d)]).join(' ');
+}
+
+function legSpeechDe(leg, prevAltitude, remainingSec) {
+    const form = leg.form || 'ha';
+    let time = '';
+    if (remainingSec == null) time = `Für ${leg.duration} Sekunden.`;
+    else if (remainingSec > 0) time = `Noch ${remainingSec} Sekunden.`;
+
+    if (form === 'm') {
+        return [`Steuerkurs ${headingWordsDe(leg)} halten.`, `Horizontalflug in ${leg.altitude} Fuß halten.`, time]
+            .filter(Boolean).join(' ');
+    }
+    const parts = [];
+    if (form !== 'a') {
+        if (leg.type === 'turn') {
+            parts.push(`${leg.turn > 0 ? 'Rechtskurve' : 'Linkskurve'}, ${Math.abs(leg.turn)} Grad.`);
+        } else {
+            parts.push(`Steuerkurs ${headingWordsDe(leg)}.`);
+        }
+    }
+    const up = leg.altitude > prevAltitude;
+    if (form === 'a' || form === 'ha') {
+        parts.push(leg.altitude === prevAltitude
+            ? `${leg.altitude} Fuß halten.`
+            : `${up ? 'Steigen' : 'Sinken'} auf ${leg.altitude} Fuß.`);
+    }
+    if (form === 'hvt') {
+        parts.push(leg.vs === 0 ? 'Horizontalflug halten.' : `${up ? 'Steigen' : 'Sinken'} mit ${leg.vs} Fuß pro Minute.`);
+        if (time) parts.push(time);
     }
     return parts.join(' ');
 }
