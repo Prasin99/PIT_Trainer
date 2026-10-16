@@ -109,8 +109,18 @@ export function PITTraining({ settings, onComplete, onExit }) {
   if (!legsRef.current) legsRef.current = isLevel ? generateLevelLegs(level, instructionCount) : generateLegs(instructionCount);
   const legs = legsRef.current;
   // pause after leg j (none between segments of the same instruction)
-  const gapAfter = (j) => (j + 1 < legs.length ? (legs[j + 1].cont ? 0 : GAP_SEC) : 0);
+  // pause after leg j -- also between the steps of one instruction
+  const gapAfter = (j) => (j + 1 < legs.length ? GAP_SEC : 0);
   const groupCount = isLevel ? legs[legs.length - 1].group + 1 : legs.length;
+  // AUA levels: if the current segment has no time of its own (e.g. the turn
+  // in "turn 30° left, then 10 s straight ahead") but a later segment of the
+  // same instruction has, return that time so it is already shown (it starts
+  // counting down when that segment begins). null = nothing to show.
+  const timedSecsOf = (i) => {
+    if (!isLevel || legs[i].showTime) return null;
+    for (let j = i + 1; j < legs.length && legs[j].cont; j++) if (legs[j].showTime) return legs[j].duration;
+    return null;
+  };
   // Full required chart, computed once (never shown during the test) --
   // it only fixes the map frame so the maps look like a printed chart.
   const headerLeftRef = useRef(null);   // overall timer value shown in the header
@@ -356,7 +366,7 @@ export function PITTraining({ settings, onComplete, onExit }) {
       legClockRef.current += dt;
       if (legClockRef.current >= legs[li].duration) {
         if (li + 1 >= legs.length) lastDone = true;
-        else if (legs[li + 1].cont) { startLeg(li + 1); li = legIdxRef.current; }   // next segment, no pause
+        //else if (legs[li + 1].cont) { startLeg(li + 1); li = legIdxRef.current; }   // next segment, no pause
         else { legPhaseRef.current = 'gap'; gapClockRef.current = 0; }
       }
     } else {
@@ -491,6 +501,7 @@ export function PITTraining({ settings, onComplete, onExit }) {
         index={isLevel ? legs[legIdx].group : legIdx}
         total={groupCount}
         lead={isLevel ? legs[legs[legIdx].lead] : null}
+        timedSecs={timedSecsOf(legIdx)}
         answers={answers}
         onAnswer={answerQuestion}
         secondsLeft={timing.secondsLeft}
@@ -559,7 +570,7 @@ export function PITTraining({ settings, onComplete, onExit }) {
 const LABEL_DE = { Heading: 'Steuerkurs', 'Maintain heading': 'Steuerkurs halten', Altitude: 'Höhe', Time: 'Zeit', Turn: 'Kurve', VS: 'VS' };
 const valueDe = (v) => String(v).replace(/^Right /, 'Rechts ').replace(/^Left /, 'Links ');
 
-function InstructionBar({ leg, index, total, lead, answers, onAnswer, secondsLeft, legPhase, mode, onMode, lang, onLang, onRepeat, onViewTrack }) {
+function InstructionBar({ leg, index, total, lead, timedSecs, answers, onAnswer, secondsLeft, legPhase, mode, onMode, lang, onLang, onRepeat, onViewTrack }) {
   // After the instruction's time is over there is a 5 s pause: hold heading/altitude.
   const holding = legPhase === 'gap';
   if (!leg) return null;
@@ -604,9 +615,9 @@ function InstructionBar({ leg, index, total, lead, answers, onAnswer, secondsLef
         <div className="flex items-center gap-3">
           {/* During the 5 s pause after an instruction's time, no countdown is shown. */}
           {/* No countdown when the instruction gives no time. */}
-          {!holding && leg.showTime !== false && (
+          {!holding && (leg.showTime !== false || timedSecs != null) && (
             <div className="font-mono text-sm px-3 py-1 rounded bg-slate-100 text-slate-800 whitespace-nowrap">
-              {de ? 'Restzeit' : 'Time left'} {secondsLeft}s
+              {de ? 'Restzeit' : 'Time left'} {leg.showTime !== false ? secondsLeft : timedSecs}s
             </div>
           )}
           {/* Language of the instructions (text and audio) */}

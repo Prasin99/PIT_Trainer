@@ -729,9 +729,8 @@ export function generateLevelLegs(level, count, rng = Math.random) {
                 ask: k === 0 ? (it.ask ?? null) : null,
                 mapLabel: k === 0 ? it.mapLabel : '',
             });
-            t += s.secs;
+            t += s.secs + GAP_SEC;      // 10 s pause after every step
         });
-        t += GAP_SEC;
     });
     return legs;
 }
@@ -754,7 +753,7 @@ export function _verifyLegs(legs) {
     const ideal = { heading: START.heading, altitude: START.altitude, x: 0, y: 0 };
     const errs = [];
     legs.forEach((leg, i) => {
-        const dur = leg.duration + (legs[i + 1] && !legs[i + 1].cont ? GAP_SEC : 0);
+        const dur = leg.duration + (legs[i + 1] ? GAP_SEC : 0);
         for (let k = 0; k < Math.round(dur / 0.05); k++) stepIdeal(ideal, leg, 0.05);
         const dh = Math.abs(((ideal.heading - leg.heading + 540) % 360) - 180);
         const da = Math.abs(ideal.altitude - leg.altitude);
